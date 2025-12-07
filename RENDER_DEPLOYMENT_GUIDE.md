@@ -200,61 +200,234 @@ simulators/
 
 ### 3.2 Set Environment Variables
 
-In the Render dashboard, go to **Environment** tab and add:
+**Important:** In Render, you add environment variables **individually**, not as a group. Each variable is added separately.
+
+**Steps in the Render dashboard:**
+
+1. **Go to your Web Service** (the one you just created)
+2. **Click on the "Environment" tab** (in the left sidebar or top menu)
+3. **For each variable below:**
+   - Click **"Add Environment Variable"** button (or **"Add"** button)
+   - Enter the **Key** (variable name)
+   - Enter the **Value** (variable value)
+   - Click **"Save"**
+   - Repeat for the next variable
+
+**You will add these variables one by one:**
+
+**Add these environment variables individually:**
 
 **Database Configuration (External MySQL - Supervisor's Database):**
-```
-DB_HOST=your-supervisor-mysql-host.com
-DB_PORT=3306
-DB_USER=your_db_username
-DB_PASSWORD=your_db_password
-DB_NAME=ilmuwanutara_e2eewater
-```
+- Click "Add Environment Variable"
+  - **Key:** `DB_HOST`
+  - **Value:** `your-supervisor-mysql-host.com` (or IP address like `123.45.67.89`)
+  - **⚠️ Important:** Use ONLY the hostname or IP address, NOT a URL!
+    - ✅ Correct: `ilmuwanutara.my` or `mysql.example.com` or `123.45.67.89`
+    - ❌ Wrong: `https://ilmuwanutara.my/phpmyadmin/` (this is phpMyAdmin URL, not MySQL host)
+    - ❌ Wrong: `http://ilmuwanutara.my` (don't include http:// or https://)
+  
+  **📝 How to find MySQL hostname from phpMyAdmin URL:**
+  - If phpMyAdmin URL is: `https://ilmuwanutara.my/phpmyadmin/`
+  - Then MySQL hostname is usually: `ilmuwanutara.my` (same domain, no https:// or /phpmyadmin/)
+  - If that doesn't work, ask supervisor for the actual MySQL server hostname/IP
+  - Sometimes it's a subdomain like: `mysql.ilmuwanutara.my`
+  
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `DB_PORT`
+  - **Value:** `3306`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `DB_USER`
+  - **Value:** `your_db_username`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `DB_PASSWORD`
+  - **Value:** `your_db_password`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `DB_NAME`
+  - **Value:** `ilmuwanutara_e2eewater`
+  - Click "Save"
 
 **Note:** Replace with your supervisor's MySQL database credentials. Ensure the database allows connections from Render's servers (see Step 4 for details).
 
-**MQTT Configuration (Plain - Not Secure):**
-```
-MQTT_HOST=your-mqtt-broker-host
-MQTT_PORT=1883
-MQTT_USER=your_mqtt_username
-MQTT_PASSWORD=your_mqtt_password
-```
+**MQTT Configuration (HiveMQ Cloud - Recommended):**
+
+**✅ Using HiveMQ Cloud?** See **[HIVEMQ_CLOUD_SETUP.md](HIVEMQ_CLOUD_SETUP.md)** for complete setup guide.
+
+**Example for HiveMQ Cloud:**
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_HOST`
+  - **Value:** `your-cluster-id.s1.eu.hivemq.cloud` 
+  c04db6249f624af8ac41e2bc1df846e3.s1.eu.hivemq.cloud
+  
+  **📍 Where to get this value:**
+  1. Go to [HiveMQ Cloud Dashboard](https://console.hivemq.cloud/)
+  2. Click on your cluster name (the one you just created)
+  3. Look for **"Connection Details"** tab or **"Endpoint"** section
+  4. You'll see a **"Broker URL"** like: `abc123def456.s1.eu.hivemq.cloud`
+  5. Copy this entire URL (including the `.s1.eu.hivemq.cloud` part)
+  6. Paste it as the value for `MQTT_HOST`
+  
+  **Example:** If you see `abc123def456.s1.eu.hivemq.cloud`, use that exact value.
+  
+  **📖 Detailed guide:** See **[HIVEMQ_FIND_HOST.md](HIVEMQ_FIND_HOST.md)** for step-by-step instructions with screenshots.
+  
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_PORT`
+  - **Value:** `8883` (TLS port for HiveMQ Cloud)
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_USE_TLS`
+  - **Value:** `true`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_USER`
+  - **Value:** `water-monitor-user` (or your HiveMQ username)
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_PASSWORD`
+  - **Value:** `your_hivemq_password` (password you set in HiveMQ Cloud)
+  - Click "Save"
+
+**Note:** HiveMQ Cloud uses TLS by default (port 8883). No need for `MQTT_CA_CERTS` (uses system certificates).
+
+**⚠️ Need help with other MQTT brokers?** See **[MQTT_BROKER_SETUP.md](MQTT_BROKER_SETUP.md)** for all options.
 
 **MQTT Configuration (Secure TLS - Recommended):**
-```
-MQTT_HOST=your-mqtt-broker-host
-MQTT_PORT=8883
-MQTT_USE_TLS=true
-MQTT_CA_CERTS=/path/to/ca-certificate.pem
-MQTT_USER=your_mqtt_username
-MQTT_PASSWORD=your_mqtt_password
-```
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_HOST`
+  - **Value:** `your-mqtt-broker-host`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_PORT`
+  - **Value:** `8883`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_USE_TLS`
+  - **Value:** `true`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_CA_CERTS`
+  - **Value:** `/path/to/ca-certificate.pem`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_USER`
+  - **Value:** `your_mqtt_username`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `MQTT_PASSWORD`
+  - **Value:** `your_mqtt_password`
+  - Click "Save"
 
 **Note:** For TLS configuration, see `MQTT_TLS_SETUP.md` for detailed instructions.
 
 **Flask Configuration:**
-```
-FLASK_ENV=production
-SECRET_KEY=your-secret-key-here-generate-random-string
-PORT=10000
-```
+- Click "Add Environment Variable"
+  - **Key:** `FLASK_ENV`
+  - **Value:** `production`
+  - Click "Save"
+- Click "Add Environment Variable"
+  - **Key:** `SECRET_KEY`
+  - **Value:** Generate a random secret key (see instructions below)
+  - Click "Save"
 
-**Python Configuration:**
-```
-PYTHON_VERSION=3.11.0
-```
+  **🔐 How to Generate SECRET_KEY:**
+  
+  **Option 1: Using Python (Recommended)**
+  ```bash
+  python -c "import secrets; print(secrets.token_urlsafe(32))"
+  ```
+  This generates a secure 43-character random string.
+  
+  **Option 2: Using OpenSSL (if installed)**
+  ```bash
+  openssl rand -hex 32
+  ```
+  This generates a 64-character hexadecimal string.
+  
+  **Option 3: Online Generator**
+  - Visit: https://randomkeygen.com/
+  - Use "CodeIgniter Encryption Keys" or "Fort Knox Passwords"
+  - Copy a random string (at least 32 characters)
+  
+  **Important:** 
+  - Use a **different** secret key for production (don't use the example)
+  - Keep it **secret** - never commit it to Git
+  - At least **32 characters** long
+  - Random and unpredictable
+- Click "Add Environment Variable"
+  - **Key:** `PORT`
+  - **Value:** `10000`
+  - Click "Save"
 
-### 3.3 Deploy
+**Python Configuration (Optional - usually auto-detected):**
+- Click "Add Environment Variable"
+  - **Key:** `PYTHON_VERSION`
+  - **Value:** `3.11.0`
+  - Click "Save"
 
-1. Click **"Create Web Service"**
+**Note:** You do NOT create an "environment group". You add each environment variable individually by clicking "Add Environment Variable" for each one.
+
+**Summary:**
+- ✅ Click "Add Environment Variable" for each variable
+- ✅ Enter Key and Value
+- ✅ Click "Save" (variables are saved immediately)
+- ⚠️ **After saving all variables, you MUST redeploy** (see section 3.2.1 below)
+
+### 3.2.1 After Adding Environment Variables
+
+**⚠️ Important:** After saving environment variables, you need to **redeploy** your service for the changes to take effect.
+
+**What happens when you click "Save":**
+- ✅ Environment variable is **saved immediately** to Render's database
+- ❌ But the **running service** does NOT automatically restart
+- ⚠️ You must **manually redeploy** to apply the new variables
+
+**Option 1: Automatic Redeploy (Recommended)**
+- After saving environment variables, Render will show a notification: **"Environment variables updated. Redeploy to apply changes?"**
+- Click **"Redeploy"** or **"Manual Deploy"** button
+- Render will rebuild and redeploy with the new environment variables
+
+**Option 2: Manual Redeploy**
+- Go to your service dashboard
+- Click **"Manual Deploy"** button (top right)
+- Select **"Clear build cache & deploy"** (optional, but recommended for first deployment)
+- Click **"Deploy latest commit"**
+- Wait for deployment to complete (2-5 minutes)
+
+**Workflow:**
+1. Add all environment variables (click "Save" for each one)
+2. After adding all variables, click **"Manual Deploy"** once
+3. Wait for deployment to complete
+4. Your service will now use the new environment variables
+
+**Note:** 
+- You can add all variables first, then redeploy once at the end (more efficient)
+- Or redeploy after each variable (slower, but you can test each one)
+
+### 3.3 Deploy (First Time)
+
+**If you haven't created the service yet:**
+
+1. **After adding all environment variables**, click **"Create Web Service"** button
 2. Render will:
    - Clone your repository
    - Install dependencies
-   - Build your application
-   - Start the service
+   - Build your Docker image
+   - Start the service with your environment variables
 3. Wait for deployment (usually 2-5 minutes)
 4. Your app will be live at: `https://iot-water-monitor.onrender.com` (or your custom domain)
+
+**If you already created the service:**
+
+1. After adding/modifying environment variables, click **"Manual Deploy"** button
+2. Select **"Clear build cache & deploy"** (optional)
+3. Click **"Deploy latest commit"**
+4. Wait for deployment to complete
+5. Check logs to verify environment variables are loaded correctly
 
 ## Step 4: Configure Database
 
@@ -526,6 +699,9 @@ Render offers persistent disk storage for paid plans.
      - `Access denied` → Wrong credentials or user doesn't have access from Render IPs
      - `Can't connect` → Firewall blocking or wrong host/port
      - `Unknown database` → Wrong database name
+     - `Unknown MySQL server host 'https://...'` → **DB_HOST is set to a URL instead of hostname!**
+       - Fix: Change `DB_HOST` from `https://example.com/phpmyadmin/` to just `example.com`
+       - `DB_HOST` should be hostname/IP only, not a URL
 
 ### "Keys not found"
 
@@ -648,11 +824,23 @@ After deploying to Render, you **still need** to set up the provision agent on y
    export MQTT_PASSWORD="your_mqtt_password"
    ```
 
-4. **Run provision agent on Raspbian:**
+4. **Set up provision agent automation (recommended):**
+   
+   **For automatic startup and auto-restart, see:**
+   - **[PROVISION_AGENT_AUTOMATION.md](PROVISION_AGENT_AUTOMATION.md)** - Complete automation guide with systemd service
+   
+   **Quick manual run (for testing only):**
    ```bash
    # On Raspbian
    cd ~/water-monitor
    python3 simulators/sensor/provision_agent.py
+   ```
+   
+   **For production, use systemd service (auto-starts on boot):**
+   ```bash
+   # Follow PROVISION_AGENT_AUTOMATION.md for full setup
+   sudo systemctl enable provision-agent.service
+   sudo systemctl start provision-agent.service
    ```
 
 5. **Update sensor clients to use custom domain:**

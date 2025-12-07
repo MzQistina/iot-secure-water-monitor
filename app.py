@@ -1872,10 +1872,12 @@ def register():
                     else:
                         # Create user
                         try:
+                            # Hash the password before storing
+                            password_hash = generate_password_hash(password)
                             user_id = create_user(
                                 username=username,
                                 email=email,
-                                password=password,
+                                password_hash=password_hash,
                                 name=name
                             )
                             if user_id:

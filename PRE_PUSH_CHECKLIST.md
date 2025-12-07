@@ -103,3 +103,4 @@ Just make sure to:
 2. Set all credentials as environment variables in Render (not in code)
 3. Handle keys via environment variables or generate on Render
 
+

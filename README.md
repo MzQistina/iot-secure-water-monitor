@@ -28,8 +28,11 @@
 
 ### Configuration & Setup
 - **[APACHE_SETUP.md](APACHE_SETUP.md)** - Apache web server setup
+- **[HIVEMQ_CLOUD_SETUP.md](HIVEMQ_CLOUD_SETUP.md)** - HiveMQ Cloud setup guide (recommended)
+- **[MQTT_BROKER_SETUP.md](MQTT_BROKER_SETUP.md)** - MQTT broker host configuration guide
 - **[MQTT_TLS_SETUP.md](MQTT_TLS_SETUP.md)** - MQTT TLS configuration
 - **[PROVISION_AGENT_GUIDE.md](PROVISION_AGENT_GUIDE.md)** - Key provisioning agent setup
+- **[PROVISION_AGENT_AUTOMATION.md](PROVISION_AGENT_AUTOMATION.md)** - Automate provision agent (auto-start on boot)
 
 ### Troubleshooting
 - **[RASPBIAN_TROUBLESHOOTING.md](RASPBIAN_TROUBLESHOOTING.md)** - Raspbian-specific troubleshooting

@@ -42,6 +42,41 @@
         .toggle-visibility .icon-closed { display: inline; }
         .toggle-visibility.showing .icon-open { display: inline; }
         .toggle-visibility.showing .icon-closed { display: none; }
+        @media (max-width: 600px) {
+            .container {
+                max-width: 100%;
+                margin: 20px 16px;
+                padding: 24px 20px;
+            }
+            h1 {
+                font-size: 1.5rem;
+                margin-bottom: 20px;
+            }
+            input[type="text"], input[type="password"], input[type="email"] {
+                font-size: 16px; /* Prevents zoom on iOS */
+                padding: 14px 12px;
+            }
+            .btn {
+                padding: 14px;
+                font-size: 1rem;
+            }
+            .error {
+                font-size: 0.9rem;
+                padding: 12px;
+            }
+            .note, .link {
+                font-size: 0.85rem;
+            }
+        }
+        @media (max-width: 400px) {
+            .container {
+                margin: 16px 12px;
+                padding: 20px 16px;
+            }
+            h1 {
+                font-size: 1.3rem;
+            }
+        }
     </style>
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self';">
 </head>

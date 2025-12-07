@@ -172,7 +172,60 @@
             .filter-form .actions { grid-column: 1 / -1; }
         }
         @media (max-width: 560px) {
-            .filter-form { grid-template-columns: 1fr; }
+            .container {
+                padding: 0 12px;
+                margin: 16px auto 32px;
+            }
+            h1 {
+                font-size: 1.4rem;
+            }
+            .sub {
+                font-size: 0.85rem;
+            }
+            .card {
+                padding: 16px;
+                margin-top: 16px;
+            }
+            .filter-form { 
+                grid-template-columns: 1fr; 
+                gap: 10px;
+            }
+            .filter-form select,
+            .filter-form input[type="text"],
+            .filter-form input[type="date"] {
+                font-size: 16px; /* Prevents zoom on iOS */
+                height: 44px; /* Better touch target */
+            }
+            .filter-form button[type="submit"],
+            .filter-form a {
+                padding: 12px 20px;
+                font-size: 1rem;
+                min-height: 44px;
+            }
+            .card {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            table {
+                min-width: 600px;
+            }
+            th, td {
+                padding: 10px 8px;
+                font-size: 0.85rem;
+            }
+            .badge {
+                font-size: 0.75rem;
+                padding: 3px 6px;
+            }
+            .pagination .page-link {
+                padding: 10px 14px;
+                font-size: 0.9rem;
+                min-height: 44px;
+                min-width: 44px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
         }
         .pagination { 
             display:flex; 

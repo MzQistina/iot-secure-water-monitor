@@ -87,3 +87,4 @@ After running the commands, check:
 - Should NOT show: `keys/`, `sensor_keys/`, `user_keys/`, `.env`, `venv/`
 - Should show: `app.py`, `Dockerfile`, `requirements.txt`, `templates/`, etc.
 
+

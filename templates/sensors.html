@@ -56,6 +56,62 @@
         @media (max-width: 860px){
             .modal-body .grid-2 { grid-template-columns: 1fr; }
         }
+        @media (max-width: 900px) {
+            .container {
+                margin: 16px auto;
+                padding: 20px 16px;
+            }
+            .toolbar {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .filters {
+                width: 100%;
+                flex-wrap: wrap;
+            }
+            .filters input, .filters select {
+                flex: 1;
+                min-width: 150px;
+                font-size: 16px; /* Prevents zoom on iOS */
+                height: 44px; /* Better touch target */
+            }
+            .btn {
+                padding: 12px 16px;
+                min-height: 44px;
+                font-size: 1rem;
+            }
+            h1 {
+                font-size: 1.4rem;
+            }
+            .subtitle {
+                font-size: 0.9rem;
+            }
+        }
+        @media (max-width: 600px) {
+            .container {
+                margin: 12px;
+                padding: 16px;
+            }
+            .table-wrap {
+                -webkit-overflow-scrolling: touch;
+            }
+            table {
+                min-width: 800px;
+            }
+            th, td {
+                padding: 8px 6px;
+                font-size: 0.85rem;
+            }
+            .modal-card {
+                margin: 12px;
+            }
+            .modal-body input[type="text"], 
+            .modal-body select, 
+            .modal-body textarea {
+                font-size: 16px; /* Prevents zoom on iOS */
+                padding: 12px;
+            }
+        }
     </style>
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self';">
 </head>

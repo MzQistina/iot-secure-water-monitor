@@ -187,6 +187,100 @@
                 grid-template-columns: 1fr;
             }
         }
+        @media (max-width: 900px) {
+            .container {
+                padding: 16px;
+                margin: 16px auto;
+            }
+            .controls {
+                padding: 16px;
+            }
+            .location-selector, .time-range-selector {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+                width: 100%;
+            }
+            .location-selector select, .time-range-selector select {
+                width: 100%;
+                min-width: unset;
+            }
+            #customRangeContainer {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+                width: 100%;
+            }
+            #customRangeContainer input[type="datetime-local"] {
+                width: 100%;
+            }
+            #applyCustomRange {
+                width: 100%;
+            }
+            .summary-table {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            table {
+                min-width: 600px;
+            }
+            th, td {
+                padding: 10px 8px;
+                font-size: 0.9rem;
+            }
+            h1 {
+                font-size: 1.5rem;
+            }
+            .sub {
+                font-size: 0.9rem;
+            }
+        }
+        @media (max-width: 600px) {
+            .container {
+                padding: 12px;
+                margin: 12px auto;
+            }
+            h1 {
+                font-size: 1.3rem;
+                margin-bottom: 6px;
+            }
+            .sub {
+                font-size: 0.85rem;
+                margin-bottom: 16px;
+            }
+            .controls {
+                padding: 12px;
+                margin-bottom: 16px;
+            }
+            .location-selector label, .time-range-selector label {
+                font-size: 0.9rem;
+            }
+            .location-selector select, .time-range-selector select {
+                padding: 10px;
+                font-size: 14px;
+            }
+            #liveStatusBadge {
+                padding: 10px 16px;
+                margin-bottom: 16px;
+            }
+            #statusText {
+                font-size: 0.9rem;
+            }
+            th, td {
+                padding: 8px 6px;
+                font-size: 0.85rem;
+            }
+            .chart-container {
+                padding: 16px;
+            }
+            .chart-title {
+                font-size: 1rem;
+                margin-bottom: 12px;
+            }
+            .chart-wrap {
+                height: 250px;
+            }
+        }
         .loading {
             text-align: center;
             padding: 40px;

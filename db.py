@@ -1,21 +1,77 @@
 import os
 from datetime import datetime
 import re
-
-import mysql.connector
-from mysql.connector import pooling, Error, errorcode
 import json
 from db_encryption import get_db_encryption
 
+# Detect database type from environment
+DB_TYPE = os.getenv('DB_TYPE', 'mysql').lower()
 
-# Environment-driven MySQL configuration
-DB_HOST = os.getenv('DB_HOST', 'localhost')
-DB_PORT = int(os.getenv('DB_PORT', '3306'))
-DB_USER = os.getenv('DB_USER', 'root')
-DB_PASSWORD = os.getenv('DB_PASSWORD', '')
-DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
+# Support both MySQL and PostgreSQL
+if DB_TYPE == 'postgresql':
+    try:
+        import psycopg2
+        from psycopg2 import pool, Error, errorcode
+        from psycopg2.extras import RealDictCursor
+        POSTGRESQL_AVAILABLE = True
+    except ImportError:
+        print("WARNING: psycopg2 not installed. Install with: pip install psycopg2-binary")
+        POSTGRESQL_AVAILABLE = False
+        DB_TYPE = 'mysql'  # Fallback to MySQL
+else:
+    POSTGRESQL_AVAILABLE = False
+
+if DB_TYPE == 'mysql':
+    import mysql.connector
+    from mysql.connector import pooling, Error, errorcode
+
+# Parse DATABASE_URL if provided (PostgreSQL style)
+DATABASE_URL = os.getenv('DATABASE_URL', '')
+if DATABASE_URL and DB_TYPE == 'postgresql':
+    # Parse postgresql://user:password@host:port/dbname
+    import urllib.parse
+    parsed = urllib.parse.urlparse(DATABASE_URL)
+    DB_USER = urllib.parse.unquote(parsed.username or 'postgres')
+    DB_PASSWORD = urllib.parse.unquote(parsed.password or '')
+    DB_HOST = parsed.hostname or 'localhost'
+    DB_PORT = parsed.port or 5432
+    DB_NAME = parsed.path.lstrip('/') or 'ilmuwanutara_e2eewater'
+else:
+    # Environment-driven database configuration
+    DB_HOST = os.getenv('DB_HOST', 'localhost')
+    DB_PORT = int(os.getenv('DB_PORT', '5432' if DB_TYPE == 'postgresql' else '3306'))
+    DB_USER = os.getenv('DB_USER', 'postgres' if DB_TYPE == 'postgresql' else 'root')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+    DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
 
 _pool = None
+
+
+def _get_connection(pool):
+    """Get a connection from the pool (works for both MySQL and PostgreSQL)."""
+    if DB_TYPE == 'postgresql':
+        return pool.getconn()
+    else:
+        return pool.get_connection()
+
+
+def _return_connection(pool, conn):
+    """Return a connection to the pool (works for both MySQL and PostgreSQL)."""
+    if DB_TYPE == 'postgresql':
+        pool.putconn(conn)
+    else:
+        conn.close()
+
+
+def _get_cursor(conn, dictionary=False):
+    """Get a cursor (works for both MySQL and PostgreSQL)."""
+    if DB_TYPE == 'postgresql':
+        if dictionary:
+            return conn.cursor(cursor_factory=RealDictCursor)
+        else:
+            return conn.cursor()
+    else:
+        return conn.cursor(dictionary=dictionary)
 
 
 def _create_database_if_missing() -> None:
@@ -47,30 +103,43 @@ def _create_database_if_missing() -> None:
 
 
 def _ensure_schema(conn) -> None:
-    cur = conn.cursor(buffered=True)  # Use buffered cursor to avoid unread result issues
+    # Create cursor based on database type
+    if DB_TYPE == 'postgresql':
+        cur = conn.cursor()
+        quote_char = '"'
+        auto_inc = 'SERIAL'
+        datetime_type = 'TIMESTAMP'
+        double_type = 'DOUBLE PRECISION'
+    else:
+        cur = conn.cursor(buffered=True)  # MySQL buffered cursor
+        quote_char = '`'
+        auto_inc = 'INT AUTO_INCREMENT'
+        datetime_type = 'DATETIME'
+        double_type = 'DOUBLE'
+    
     # Sensor type master table (defaults and metadata)
     cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS sensor_type (
-            id INT AUTO_INCREMENT PRIMARY KEY,
+        f"""
+        CREATE TABLE IF NOT EXISTS {quote_char}sensor_type{quote_char} (
+            id {auto_inc} PRIMARY KEY,
             type_name VARCHAR(100) NOT NULL UNIQUE,
             unit VARCHAR(50) DEFAULT NULL,
-            default_min DOUBLE NULL,
-            default_max DOUBLE NULL,
+            default_min {double_type} NULL,
+            default_max {double_type} NULL,
             description TEXT NULL
         )
         """
     )
     # Seed default sensor types if table is empty
     try:
-        cur.execute("SELECT COUNT(*) FROM `sensor_type`")
+        cur.execute(f"SELECT COUNT(*) FROM {quote_char}sensor_type{quote_char}")
         row = cur.fetchone()
         count = int(row[0]) if row and row[0] is not None else 0
         if count == 0:
             print("Seeding default sensor types...")
             cur.executemany(
-                """
-                INSERT INTO `sensor_type` (type_name, unit, default_min, default_max, description)
+                f"""
+                INSERT INTO {quote_char}sensor_type{quote_char} (type_name, unit, default_min, default_max, description)
                 VALUES (%s, %s, %s, %s, %s)
                 """,
                 [
@@ -114,9 +183,9 @@ def _ensure_schema(conn) -> None:
     # )
     # User credentials table for authentication (sr_no, email, name, username, password)
     cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS user_cred (
-            sr_no INT AUTO_INCREMENT PRIMARY KEY,
+        f"""
+        CREATE TABLE IF NOT EXISTS {quote_char}user_cred{quote_char} (
+            sr_no {auto_inc} PRIMARY KEY,
             email VARCHAR(255) NOT NULL UNIQUE,
             name VARCHAR(255) NOT NULL,
             username VARCHAR(150) NOT NULL UNIQUE,
@@ -126,44 +195,78 @@ def _ensure_schema(conn) -> None:
         """
     )
     # Sensors table for device registration and key management
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS sensors (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            device_id VARCHAR(100) NOT NULL,
-            device_type VARCHAR(100) NOT NULL,
-            sensor_type_id INT NULL,
-            location VARCHAR(255) DEFAULT NULL,
-            public_key TEXT NULL,
-            status ENUM('active', 'inactive', 'revoked') DEFAULT 'active',
-            registered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            last_seen DATETIME DEFAULT NULL,
-            min_threshold DOUBLE NULL,
-            max_threshold DOUBLE NULL,
-            user_id INT NULL,
-            INDEX idx_sensors_user_id (user_id),
-            INDEX idx_sensors_device_id (device_id),
-            UNIQUE KEY unique_user_device (user_id, device_id),
-            CONSTRAINT fk_sensors_user FOREIGN KEY (user_id)
-                REFERENCES user_cred(sr_no) ON UPDATE CASCADE ON DELETE CASCADE
+    if DB_TYPE == 'postgresql':
+        # PostgreSQL: Use VARCHAR with CHECK instead of ENUM
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {quote_char}sensors{quote_char} (
+                id {auto_inc} PRIMARY KEY,
+                device_id VARCHAR(100) NOT NULL,
+                device_type VARCHAR(100) NOT NULL,
+                sensor_type_id INT NULL,
+                location VARCHAR(255) DEFAULT NULL,
+                public_key TEXT NULL,
+                status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'revoked')),
+                registered_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                last_seen {datetime_type} DEFAULT NULL,
+                min_threshold {double_type} NULL,
+                max_threshold {double_type} NULL,
+                user_id INT NULL,
+                CONSTRAINT fk_sensors_user FOREIGN KEY (user_id)
+                    REFERENCES {quote_char}user_cred{quote_char}(sr_no) ON UPDATE CASCADE ON DELETE CASCADE
+            )
+            """
         )
-        """
-    )
-    # Add user_id column if it doesn't exist (for existing databases)
-    try:
-        cur.execute("ALTER TABLE sensors ADD COLUMN user_id INT NULL")
-        cur.execute("ALTER TABLE sensors ADD INDEX idx_sensors_user_id (user_id)")
-        cur.execute("""
-            ALTER TABLE sensors 
-            ADD CONSTRAINT fk_sensors_user 
-            FOREIGN KEY (user_id) REFERENCES user_cred(sr_no) ON UPDATE CASCADE ON DELETE CASCADE
-        """)
-    except Exception:
-        # Column or constraint already exists, ignore
-        pass
+        # Create indexes separately for PostgreSQL
+        try:
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_sensors_user_id ON {quote_char}sensors{quote_char}(user_id)")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_sensors_device_id ON {quote_char}sensors{quote_char}(device_id)")
+            cur.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS unique_user_device ON {quote_char}sensors{quote_char}(user_id, device_id)")
+        except Exception:
+            pass
+    else:
+        # MySQL: Use ENUM
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {quote_char}sensors{quote_char} (
+                id {auto_inc} PRIMARY KEY,
+                device_id VARCHAR(100) NOT NULL,
+                device_type VARCHAR(100) NOT NULL,
+                sensor_type_id INT NULL,
+                location VARCHAR(255) DEFAULT NULL,
+                public_key TEXT NULL,
+                status ENUM('active', 'inactive', 'revoked') DEFAULT 'active',
+                registered_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                last_seen {datetime_type} DEFAULT NULL,
+                min_threshold {double_type} NULL,
+                max_threshold {double_type} NULL,
+                user_id INT NULL,
+                INDEX idx_sensors_user_id (user_id),
+                INDEX idx_sensors_device_id (device_id),
+                UNIQUE KEY unique_user_device (user_id, device_id),
+                CONSTRAINT fk_sensors_user FOREIGN KEY (user_id)
+                    REFERENCES {quote_char}user_cred{quote_char}(sr_no) ON UPDATE CASCADE ON DELETE CASCADE
+            )
+            """
+        )
+    # Add user_id column if it doesn't exist (for existing databases) - MySQL only
+    if DB_TYPE != 'postgresql':
+        try:
+            cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN user_id INT NULL")
+            cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD INDEX idx_sensors_user_id (user_id)")
+            cur.execute(f"""
+                ALTER TABLE {quote_char}sensors{quote_char} 
+                ADD CONSTRAINT fk_sensors_user 
+                FOREIGN KEY (user_id) REFERENCES {quote_char}user_cred{quote_char}(sr_no) ON UPDATE CASCADE ON DELETE CASCADE
+            """)
+        except Exception:
+            # Column or constraint already exists, ignore
+            pass
     # Remove old UNIQUE constraint on device_id and add composite unique constraint
     # This allows multiple users to have the same device_id, but prevents same user from having duplicate device_id
-    try:
+    # MySQL-specific migration code - skip for PostgreSQL
+    if DB_TYPE != 'postgresql':
+        try:
         # Check if unique_user_device constraint already exists
         cur.execute("SHOW INDEX FROM sensors WHERE Key_name = 'unique_user_device'")
         constraint_exists = cur.fetchone() is not None
@@ -264,177 +367,250 @@ def _ensure_schema(conn) -> None:
         pass
     # Per-sensor data time series table (if not already created)
     try:
+        if DB_TYPE == 'postgresql':
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {quote_char}sensor_data{quote_char} (
+                    id {auto_inc} PRIMARY KEY,
+                    sensor_id INT NOT NULL,
+                    user_id INT NULL,
+                    device_id VARCHAR(100) NULL,
+                    recorded_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                    value TEXT NOT NULL,
+                    status VARCHAR(20) DEFAULT 'normal' CHECK (status IN ('normal', 'warning', 'critical')),
+                    CONSTRAINT fk_sensor_data_sensor FOREIGN KEY (sensor_id)
+                        REFERENCES {quote_char}sensors{quote_char}(id) ON UPDATE CASCADE ON DELETE CASCADE
+                )
+                """
+            )
+            # Create indexes separately for PostgreSQL
+            try:
+                cur.execute(f"CREATE INDEX IF NOT EXISTS idx_sensor_data_sensor_id ON {quote_char}sensor_data{quote_char}(sensor_id)")
+                cur.execute(f"CREATE INDEX IF NOT EXISTS idx_sensor_data_user_id ON {quote_char}sensor_data{quote_char}(user_id)")
+                cur.execute(f"CREATE INDEX IF NOT EXISTS idx_sensor_data_device_id ON {quote_char}sensor_data{quote_char}(device_id)")
+            except Exception:
+                pass
+        else:
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {quote_char}sensor_data{quote_char} (
+                    id {auto_inc} PRIMARY KEY,
+                    sensor_id INT NOT NULL,
+                    user_id INT NULL,
+                    device_id VARCHAR(100) NULL,
+                    recorded_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                    value TEXT NOT NULL,
+                    status ENUM('normal','warning','critical') DEFAULT 'normal',
+                    INDEX idx_sensor_data_sensor_id (sensor_id),
+                    INDEX idx_sensor_data_user_id (user_id),
+                    INDEX idx_sensor_data_device_id (device_id),
+                    CONSTRAINT fk_sensor_data_sensor FOREIGN KEY (sensor_id)
+                        REFERENCES {quote_char}sensors{quote_char}(id) ON UPDATE CASCADE ON DELETE CASCADE
+                )
+                """
+            )
+        # MySQL-specific migration code - skip for PostgreSQL (tables are created fresh)
+        if DB_TYPE != 'postgresql':
+            # Migrate existing DOUBLE column to TEXT for encryption support
+            try:
+                cur.execute(f"SHOW COLUMNS FROM {quote_char}sensor_data{quote_char} WHERE Field = 'value' AND Type LIKE 'DOUBLE%'")
+                if cur.fetchone():
+                    cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} MODIFY COLUMN value TEXT NOT NULL")
+                    conn.commit()
+                    print("Migrated sensor_data.value column to TEXT for encryption support")
+                cur.fetchall()  # Consume any remaining results
+            except Exception as e:
+                print(f"Note: sensor_data schema migration: {e}")
+                try:
+                    cur.fetchall()
+                except:
+                    pass
+            
+            # Add user_id and device_id columns if they don't exist (migration for existing tables)
+            try:
+                cur.execute(f"SHOW COLUMNS FROM {quote_char}sensor_data{quote_char} WHERE Field = 'user_id'")
+                if not cur.fetchone():
+                    cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} ADD COLUMN user_id INT NULL AFTER sensor_id")
+                    cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} ADD INDEX idx_sensor_data_user_id (user_id)")
+                    conn.commit()
+                    print("Added user_id column to sensor_data table")
+                cur.fetchall()  # Consume any remaining results
+            except Exception as e:
+                print(f"Note: sensor_data user_id migration: {e}")
+                try:
+                    cur.fetchall()
+                except:
+                    pass
+            
+            try:
+                cur.execute(f"SHOW COLUMNS FROM {quote_char}sensor_data{quote_char} WHERE Field = 'device_id'")
+                if not cur.fetchone():
+                    cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} ADD COLUMN device_id VARCHAR(100) NULL AFTER user_id")
+                    cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} ADD INDEX idx_sensor_data_device_id (device_id)")
+                    conn.commit()
+                    print("Added device_id column to sensor_data table")
+                cur.fetchall()  # Consume any remaining results
+            except Exception as e:
+                print(f"Note: sensor_data device_id migration: {e}")
+                try:
+                    cur.fetchall()
+                except:
+                    pass
+            
+            # Backfill user_id and device_id from sensors table for existing records
+            try:
+                cur.execute(f"""
+                    UPDATE {quote_char}sensor_data{quote_char} sd
+                    JOIN {quote_char}sensors{quote_char} s ON s.id = sd.sensor_id
+                    SET sd.user_id = s.user_id, sd.device_id = s.device_id
+                    WHERE sd.user_id IS NULL OR sd.device_id IS NULL
+                """)
+                rows_updated = cur.rowcount
+                if rows_updated > 0:
+                    conn.commit()
+                    print(f"Backfilled user_id and device_id for {rows_updated} existing sensor_data records")
+                cur.fetchall()  # Consume any remaining results
+            except Exception as e:
+                print(f"Note: sensor_data backfill: {e}")
+                try:
+                    cur.fetchall()
+                except:
+                    pass
+    except Exception:
+        pass
+    # MySQL-specific migration code - skip for PostgreSQL (columns already in CREATE TABLE)
+    if DB_TYPE != 'postgresql':
+        # Ensure legacy schemas allow NULL public_key
+        try:
+            cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} MODIFY COLUMN public_key TEXT NULL")
+        except Exception:
+            # Ignore if already NULL or if permissions prevent alter
+            pass
+        # Note: we no longer drop legacy columns automatically to avoid accidental data loss.
+        # Ensure threshold columns exist
+        try:
+            cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN min_threshold {double_type} NULL")
+        except Exception:
+            pass
+        try:
+            cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN max_threshold {double_type} NULL")
+        except Exception:
+            pass
+        # Ensure sensor_type_id column exists (for FK to sensor_type)
+        try:
+            cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN sensor_type_id INT NULL")
+        except Exception:
+            pass
+        # Backfill sensor_type_id from device_type where possible
+        try:
+            cur.execute(
+                f"""
+                UPDATE {quote_char}sensors{quote_char} s
+                JOIN {quote_char}sensor_type{quote_char} st ON st.type_name = s.device_type
+                SET s.sensor_type_id = st.id
+                WHERE s.sensor_type_id IS NULL
+                """
+            )
+            # Consume any results (UPDATE doesn't return results, but be safe)
+            try:
+                cur.fetchall()
+            except:
+                pass
+        except Exception:
+            # Try to consume results even on error
+            try:
+                cur.fetchall()
+            except:
+                pass
+        # Add index and FK constraint (best-effort, ignore if exists)
+        try:
+            cur.execute(f"CREATE INDEX idx_sensors_sensor_type_id ON {quote_char}sensors{quote_char}(sensor_type_id)")
+            try:
+                cur.fetchall()
+            except:
+                pass
+        except Exception:
+            pass
+        try:
+            cur.execute(
+                f"""
+                ALTER TABLE {quote_char}sensors{quote_char}
+                ADD CONSTRAINT fk_sensors_sensor_type
+                FOREIGN KEY (sensor_type_id) REFERENCES {quote_char}sensor_type{quote_char}(id)
+                ON UPDATE CASCADE
+                ON DELETE SET NULL
+                """
+            )
+            try:
+                cur.fetchall()
+            except:
+                pass
+        except Exception:
+            pass
+    # Device sessions table for secure device-server communication
+    if DB_TYPE == 'postgresql':
+        # PostgreSQL: Use trigger for ON UPDATE CURRENT_TIMESTAMP
         cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sensor_data (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                sensor_id INT NOT NULL,
-                user_id INT NULL,
-                device_id VARCHAR(100) NULL,
-                recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                value TEXT NOT NULL,
-                status ENUM('normal','warning','critical') DEFAULT 'normal',
-                INDEX idx_sensor_data_sensor_id (sensor_id),
-                INDEX idx_sensor_data_user_id (user_id),
-                INDEX idx_sensor_data_device_id (device_id),
-                CONSTRAINT fk_sensor_data_sensor FOREIGN KEY (sensor_id)
-                    REFERENCES sensors(id) ON UPDATE CASCADE ON DELETE CASCADE
+            f"""
+            CREATE TABLE IF NOT EXISTS {quote_char}device_sessions{quote_char} (
+                id {auto_inc} PRIMARY KEY,
+                session_token VARCHAR(255) NOT NULL UNIQUE,
+                device_id VARCHAR(100) NOT NULL,
+                counter INT DEFAULT 0,
+                expires_at {datetime_type} NOT NULL,
+                created_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                last_used_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT fk_device_sessions_device FOREIGN KEY (device_id)
+                    REFERENCES {quote_char}sensors{quote_char}(device_id) ON UPDATE CASCADE ON DELETE CASCADE
             )
             """
         )
-        # Migrate existing DOUBLE column to TEXT for encryption support
+        # Create indexes separately
         try:
-            cur.execute("SHOW COLUMNS FROM sensor_data WHERE Field = 'value' AND Type LIKE 'DOUBLE%'")
-            if cur.fetchone():
-                cur.execute("ALTER TABLE sensor_data MODIFY COLUMN value TEXT NOT NULL")
-                conn.commit()
-                print("Migrated sensor_data.value column to TEXT for encryption support")
-            cur.fetchall()  # Consume any remaining results
-        except Exception as e:
-            print(f"Note: sensor_data schema migration: {e}")
-            try:
-                cur.fetchall()
-            except:
-                pass
-        
-        # Add user_id and device_id columns if they don't exist (migration for existing tables)
-        try:
-            cur.execute("SHOW COLUMNS FROM sensor_data WHERE Field = 'user_id'")
-            if not cur.fetchone():
-                cur.execute("ALTER TABLE sensor_data ADD COLUMN user_id INT NULL AFTER sensor_id")
-                cur.execute("ALTER TABLE sensor_data ADD INDEX idx_sensor_data_user_id (user_id)")
-                conn.commit()
-                print("Added user_id column to sensor_data table")
-            cur.fetchall()  # Consume any remaining results
-        except Exception as e:
-            print(f"Note: sensor_data user_id migration: {e}")
-            try:
-                cur.fetchall()
-            except:
-                pass
-        
-        try:
-            cur.execute("SHOW COLUMNS FROM sensor_data WHERE Field = 'device_id'")
-            if not cur.fetchone():
-                cur.execute("ALTER TABLE sensor_data ADD COLUMN device_id VARCHAR(100) NULL AFTER user_id")
-                cur.execute("ALTER TABLE sensor_data ADD INDEX idx_sensor_data_device_id (device_id)")
-                conn.commit()
-                print("Added device_id column to sensor_data table")
-            cur.fetchall()  # Consume any remaining results
-        except Exception as e:
-            print(f"Note: sensor_data device_id migration: {e}")
-            try:
-                cur.fetchall()
-            except:
-                pass
-        
-        # Backfill user_id and device_id from sensors table for existing records
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_device_sessions_token ON {quote_char}device_sessions{quote_char}(session_token)")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_device_sessions_device ON {quote_char}device_sessions{quote_char}(device_id)")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_device_sessions_expires ON {quote_char}device_sessions{quote_char}(expires_at)")
+        except Exception:
+            pass
+        # Create trigger for last_used_at auto-update (PostgreSQL equivalent of ON UPDATE)
         try:
             cur.execute("""
-                UPDATE sensor_data sd
-                JOIN sensors s ON s.id = sd.sensor_id
-                SET sd.user_id = s.user_id, sd.device_id = s.device_id
-                WHERE sd.user_id IS NULL OR sd.device_id IS NULL
+                CREATE OR REPLACE FUNCTION update_last_used_at()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    NEW.last_used_at = CURRENT_TIMESTAMP;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
             """)
-            rows_updated = cur.rowcount
-            if rows_updated > 0:
-                conn.commit()
-                print(f"Backfilled user_id and device_id for {rows_updated} existing sensor_data records")
-            cur.fetchall()  # Consume any remaining results
-        except Exception as e:
-            print(f"Note: sensor_data backfill: {e}")
-            try:
-                cur.fetchall()
-            except:
-                pass
-    except Exception:
-        pass
-    # Ensure legacy schemas allow NULL public_key
-    try:
-        cur.execute("ALTER TABLE sensors MODIFY COLUMN public_key TEXT NULL")
-    except Exception:
-        # Ignore if already NULL or if permissions prevent alter
-        pass
-    # Note: we no longer drop legacy columns automatically to avoid accidental data loss.
-    # Ensure threshold columns exist
-    try:
-        cur.execute("ALTER TABLE sensors ADD COLUMN min_threshold DOUBLE NULL")
-    except Exception:
-        pass
-    try:
-        cur.execute("ALTER TABLE sensors ADD COLUMN max_threshold DOUBLE NULL")
-    except Exception:
-        pass
-    # Ensure sensor_type_id column exists (for FK to sensor_type)
-    try:
-        cur.execute("ALTER TABLE sensors ADD COLUMN sensor_type_id INT NULL")
-    except Exception:
-        pass
-    # Backfill sensor_type_id from device_type where possible
-    try:
+            cur.execute("""
+                DROP TRIGGER IF EXISTS trigger_update_last_used_at ON device_sessions;
+                CREATE TRIGGER trigger_update_last_used_at
+                BEFORE UPDATE ON device_sessions
+                FOR EACH ROW
+                EXECUTE FUNCTION update_last_used_at();
+            """)
+        except Exception:
+            pass
+    else:
         cur.execute(
-            """
-            UPDATE sensors s
-            JOIN `sensor_type` st ON st.type_name = s.device_type
-            SET s.sensor_type_id = st.id
-            WHERE s.sensor_type_id IS NULL
-            """
-        )
-        # Consume any results (UPDATE doesn't return results, but be safe)
-        try:
-            cur.fetchall()
-        except:
-            pass
-    except Exception:
-        # Try to consume results even on error
-        try:
-            cur.fetchall()
-        except:
-            pass
-    # Add index and FK constraint (best-effort, ignore if exists)
-    try:
-        cur.execute("CREATE INDEX idx_sensors_sensor_type_id ON sensors(sensor_type_id)")
-        try:
-            cur.fetchall()
-        except:
-            pass
-    except Exception:
-        pass
-    try:
-        cur.execute(
-            """
-            ALTER TABLE sensors
-            ADD CONSTRAINT fk_sensors_sensor_type
-            FOREIGN KEY (sensor_type_id) REFERENCES `sensor_type`(id)
-            ON UPDATE CASCADE
-            ON DELETE SET NULL
+            f"""
+            CREATE TABLE IF NOT EXISTS {quote_char}device_sessions{quote_char} (
+                id {auto_inc} PRIMARY KEY,
+                session_token VARCHAR(255) NOT NULL UNIQUE,
+                device_id VARCHAR(100) NOT NULL,
+                counter INT DEFAULT 0,
+                expires_at {datetime_type} NOT NULL,
+                created_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                last_used_at {datetime_type} DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_device_sessions_token (session_token),
+                INDEX idx_device_sessions_device (device_id),
+                INDEX idx_device_sessions_expires (expires_at),
+                CONSTRAINT fk_device_sessions_device FOREIGN KEY (device_id)
+                    REFERENCES {quote_char}sensors{quote_char}(device_id) ON UPDATE CASCADE ON DELETE CASCADE
+            )
             """
         )
-        try:
-            cur.fetchall()
-        except:
-            pass
-    except Exception:
-        pass
-    # Device sessions table for secure device-server communication
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS device_sessions (
-            id INT AUTO_INCREMENT PRIMARY KEY,
-            session_token VARCHAR(255) NOT NULL UNIQUE,
-            device_id VARCHAR(100) NOT NULL,
-            counter INT DEFAULT 0,
-            expires_at DATETIME NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            last_used_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            INDEX idx_device_sessions_token (session_token),
-            INDEX idx_device_sessions_device (device_id),
-            INDEX idx_device_sessions_expires (expires_at),
-            CONSTRAINT fk_device_sessions_device FOREIGN KEY (device_id)
-                REFERENCES sensors(device_id) ON UPDATE CASCADE ON DELETE CASCADE
-        )
-        """
-    )
     # Per-user thresholds table removed; using sensor_type defaults and per-sensor overrides
     conn.commit()
     cur.close()
@@ -445,75 +621,110 @@ def get_pool():
     if _pool is not None:
         # Test if pool is still valid
         try:
-            test_conn = _pool.get_connection()
-            test_conn.close()
+            if DB_TYPE == 'postgresql':
+                test_conn = _pool.getconn()
+                _pool.putconn(test_conn)
+            else:
+                test_conn = _pool.get_connection()
+                test_conn.close()
             return _pool
         except Exception as e:
             print(f"WARNING: Existing pool is invalid, recreating: {e}")
             _pool = None
     
-    print(f"DEBUG: Initializing database connection pool...")
+    print(f"DEBUG: Initializing {DB_TYPE.upper()} database connection pool...")
     print(f"DEBUG: DB_HOST={DB_HOST}, DB_PORT={DB_PORT}, DB_USER={DB_USER}, DB_NAME={DB_NAME}")
     
-    try:
-        _pool = pooling.MySQLConnectionPool(
-            pool_name="water_pool",
-            pool_size=5,
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-        )
-        print("DEBUG: Connection pool created successfully")
-        
-        # Test the connection
-        _conn = _pool.get_connection()
-        print("DEBUG: Test connection obtained from pool")
-        _ensure_schema(_conn)
-        _conn.close()
-        print("DEBUG: Database connection pool initialized successfully")
-        return _pool
-    except Error as init_err:
-        errno = getattr(init_err, 'errno', None)
-        print(f"ERROR: MySQL connection error (errno: {errno}): {init_err}")
-        import traceback
-        traceback.print_exc()
-        
-        if errno == errorcode.ER_BAD_DB_ERROR:
-            print("DEBUG: Database does not exist, attempting to create...")
-            _create_database_if_missing()
-            try:
-                _pool = pooling.MySQLConnectionPool(
-                    pool_name="water_pool",
-                    pool_size=5,
-                    host=DB_HOST,
-                    port=DB_PORT,
-                    user=DB_USER,
-                    password=DB_PASSWORD,
-                    database=DB_NAME,
-                )
-                _conn = _pool.get_connection()
-                _ensure_schema(_conn)
-                _conn.close()
-                print("DEBUG: Database created and connection pool initialized")
-                return _pool
-            except Exception as retry_err:
-                _pool = None
-                print(f"ERROR: MySQL init retry failed: {retry_err}")
-                import traceback
-                traceback.print_exc()
-        else:
+    if DB_TYPE == 'postgresql':
+        if not POSTGRESQL_AVAILABLE:
+            print("ERROR: PostgreSQL requested but psycopg2 not available")
+            return None
+        try:
+            _pool = psycopg2.pool.SimpleConnectionPool(
+                1,  # min connections
+                5,  # max connections
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+            )
+            print("DEBUG: PostgreSQL connection pool created successfully")
+            
+            # Test the connection
+            _conn = _pool.getconn()
+            print("DEBUG: Test connection obtained from pool")
+            _ensure_schema(_conn)
+            _pool.putconn(_conn)
+            print("DEBUG: PostgreSQL database connection pool initialized successfully")
+            return _pool
+        except Exception as e:
             _pool = None
-            print(f"ERROR: MySQL init failed: {init_err}")
-            print(f"ERROR: Check MySQL server is running and credentials are correct")
-    except Exception as e:
-        _pool = None
-        print(f"ERROR: Unexpected error initializing database pool: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    return _pool
+            print(f"ERROR: PostgreSQL connection error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    else:
+        # MySQL connection
+        try:
+            _pool = pooling.MySQLConnectionPool(
+                pool_name="water_pool",
+                pool_size=5,
+                host=DB_HOST,
+                port=DB_PORT,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                database=DB_NAME,
+            )
+            print("DEBUG: MySQL connection pool created successfully")
+            
+            # Test the connection
+            _conn = _pool.get_connection()
+            print("DEBUG: Test connection obtained from pool")
+            _ensure_schema(_conn)
+            _conn.close()
+            print("DEBUG: MySQL database connection pool initialized successfully")
+            return _pool
+        except Error as init_err:
+            errno = getattr(init_err, 'errno', None)
+            print(f"ERROR: MySQL connection error (errno: {errno}): {init_err}")
+            import traceback
+            traceback.print_exc()
+            
+            if errno == errorcode.ER_BAD_DB_ERROR:
+                print("DEBUG: Database does not exist, attempting to create...")
+                _create_database_if_missing()
+                try:
+                    _pool = pooling.MySQLConnectionPool(
+                        pool_name="water_pool",
+                        pool_size=5,
+                        host=DB_HOST,
+                        port=DB_PORT,
+                        user=DB_USER,
+                        password=DB_PASSWORD,
+                        database=DB_NAME,
+                    )
+                    _conn = _pool.get_connection()
+                    _ensure_schema(_conn)
+                    _return_connection(_pool, _conn)
+                    print("DEBUG: Database created and connection pool initialized")
+                    return _pool
+                except Exception as retry_err:
+                    _pool = None
+                    print(f"ERROR: MySQL init retry failed: {retry_err}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                _pool = None
+                print(f"ERROR: MySQL init failed: {init_err}")
+                print(f"ERROR: Check MySQL server is running and credentials are correct")
+        except Exception as e:
+            _pool = None
+            print(f"ERROR: Unexpected error initializing database pool: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return _pool
 
 
 def insert_reading(tds: float, ph: float, turbidity: float, safe: bool, reasons) -> None:
@@ -527,8 +738,8 @@ def insert_reading(tds: float, ph: float, turbidity: float, safe: bool, reasons)
         encrypted_ph = encryption.encrypt_value(ph)
         encrypted_turbidity = encryption.encrypt_value(turbidity)
         
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             INSERT INTO water_readings (tds, ph, turbidity, safe_to_drink, safety_issues)
@@ -544,7 +755,7 @@ def insert_reading(tds: float, ph: float, turbidity: float, safe: bool, reasons)
         )
         conn.commit()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
     except Exception as db_err:
         print(f"MySQL write error: {db_err}")
 
@@ -563,8 +774,8 @@ def create_user(email: str, name: str, username: str, password_hash: str) -> boo
             return False
         
         print(f"DEBUG: Attempting to create user - email: '{email}', username: '{username}'")
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         
         # Check if username or email already exists first
         cur.execute("SELECT username, email FROM user_cred WHERE username = %s OR email = %s LIMIT 2", (username, email))
@@ -578,7 +789,7 @@ def create_user(email: str, name: str, username: str, password_hash: str) -> boo
                 if existing_email == email:
                     print(f"DEBUG: Email already exists: '{email}'")
             cur.close()
-            conn.close()
+            _return_connection(pool, conn)
             return False
         
         cur.execute(
@@ -602,7 +813,7 @@ def create_user(email: str, name: str, username: str, password_hash: str) -> boo
                 print(f"DEBUG: Password hash stored correctly - {len(stored_hash)} chars")
         
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return True
     except Error as e:
         errno = getattr(e, 'errno', None)
@@ -635,8 +846,8 @@ def get_user_by_username(username: str):
         print("ERROR: Database connection pool is None in get_user_by_username()")
         return None
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         # Try exact match first, then case-insensitive
         cur.execute(
             """
@@ -663,7 +874,7 @@ def get_user_by_username(username: str):
             row = cur.fetchone()
         
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         if row:
             print(f"DEBUG: Found user: {row.get('username')} (searched for: {username})")
             print(f"DEBUG: User data - sr_no: {row.get('sr_no')}, email: {row.get('email')}")
@@ -682,8 +893,8 @@ def get_user_by_email(email: str):
     if pool is None:
         return None
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         cur.execute(
             """
             SELECT sr_no, email, name, username, password
@@ -695,7 +906,7 @@ def get_user_by_email(email: str):
         )
         row = cur.fetchone()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return row
     except Exception as e:
         print(f"MySQL get_user_by_email error: {e}")
@@ -708,8 +919,8 @@ def update_user_profile(current_username: str, new_email: str, new_name: str, ne
     if pool is None:
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             UPDATE user_cred
@@ -721,7 +932,7 @@ def update_user_profile(current_username: str, new_email: str, new_name: str, ne
         conn.commit()
         updated = cur.rowcount > 0
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return updated
     except Error as e:
         # Duplicate key (email or username)
@@ -736,8 +947,8 @@ def update_user_password(username: str, password_hash: str) -> bool:
     if pool is None:
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             UPDATE user_cred
@@ -749,7 +960,7 @@ def update_user_password(username: str, password_hash: str) -> bool:
         conn.commit()
         updated = cur.rowcount > 0
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return updated
     except Exception as e:
         print(f"MySQL update_user_password error: {e}")
@@ -768,8 +979,8 @@ def create_sensor(
     if pool is None:
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         # Resolve sensor_type_id from sensor_type table
         cur.execute(
             """
@@ -797,7 +1008,7 @@ def create_sensor(
         )
         conn.commit()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return True
     except Error as e:
         if getattr(e, 'errno', None) == errorcode.ER_DUP_ENTRY:
@@ -814,8 +1025,8 @@ def get_sensor_by_device_id(device_id: str, user_id: int | None = None):
     if pool is None:
         return None
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         if user_id is not None:
             cur.execute(
                 """
@@ -832,7 +1043,7 @@ def get_sensor_by_device_id(device_id: str, user_id: int | None = None):
             )
         row = cur.fetchone()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return row
     except Exception as e:
         print(f"MySQL get_sensor_by_device_id error: {e}")
@@ -850,8 +1061,8 @@ def update_sensor_by_device_id(
     if pool is None:
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             UPDATE sensors
@@ -874,7 +1085,7 @@ def update_sensor_by_device_id(
         conn.commit()
         updated = cur.rowcount > 0
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return updated
     except Exception as e:
         print(f"MySQL update_sensor_by_device_id error: {e}")
@@ -885,8 +1096,8 @@ def list_sensors(limit: int | None = None, user_id: int | None = None):
     if pool is None:
         return []
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         if user_id is not None:
             if limit is not None:
                 cur.execute(
@@ -926,7 +1137,7 @@ def list_sensors(limit: int | None = None, user_id: int | None = None):
                 )
         rows = cur.fetchall()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return rows or []
     except Exception as e:
         print(f"MySQL list_sensors error: {e}")
@@ -937,8 +1148,8 @@ def count_active_sensors(exclude_device_id: str | None = None) -> int:
     if pool is None:
         return 0
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         if exclude_device_id:
             cur.execute(
                 """
@@ -956,7 +1167,7 @@ def count_active_sensors(exclude_device_id: str | None = None) -> int:
             )
         row = cur.fetchone()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return int(row[0] if row and row[0] is not None else 0)
     except Exception as e:
         print(f"MySQL count_active_sensors error: {e}")
@@ -967,8 +1178,8 @@ def count_active_sensors_by_location(location: str | None, exclude_device_id: st
     if pool is None:
         return 0
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         normalized_location = (location or '').strip()
         if user_id is not None:
             if exclude_device_id:
@@ -1014,7 +1225,7 @@ def count_active_sensors_by_location(location: str | None, exclude_device_id: st
                 )
         row = cur.fetchone()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return int(row[0] if row and row[0] is not None else 0)
     except Exception as e:
         print(f"MySQL count_active_sensors_by_location error: {e}")
@@ -1025,8 +1236,8 @@ def delete_sensor_by_device_id(device_id: str) -> bool:
     if pool is None:
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             DELETE FROM sensors WHERE device_id = %s
@@ -1036,7 +1247,7 @@ def delete_sensor_by_device_id(device_id: str) -> bool:
         conn.commit()
         deleted = cur.rowcount > 0
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return deleted
     except Exception as e:
         print(f"MySQL delete_sensor_by_device_id error: {e}")
@@ -1049,8 +1260,8 @@ def seed_sensor_types_if_empty():
         print("ERROR: Database connection pool is None in seed_sensor_types_if_empty()")
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute("SELECT COUNT(*) FROM `sensor_type`")
         row = cur.fetchone()
         count = int(row[0]) if row and row[0] is not None else 0
@@ -1069,12 +1280,12 @@ def seed_sensor_types_if_empty():
             )
             conn.commit()
             cur.close()
-            conn.close()
+            _return_connection(pool, conn)
             print("Successfully seeded default sensor types")
             return True
         else:
             cur.close()
-            conn.close()
+            _return_connection(pool, conn)
             print(f"sensor_type table already has {count} entries")
             return False
     except Exception as e:
@@ -1092,8 +1303,8 @@ def list_sensor_types():
     
     conn = None
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         
         # Simple, direct query
         cur.execute("SELECT id, type_name, unit, default_min, default_max, description FROM `sensor_type` ORDER BY type_name ASC")
@@ -1120,7 +1331,7 @@ def list_sensor_types():
                 })
         
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         
         print(f"DEBUG: list_sensor_types() returning {len(result)} sensor types")
         if result:
@@ -1134,7 +1345,7 @@ def list_sensor_types():
         traceback.print_exc()
         if conn:
             try:
-                conn.close()
+                _return_connection(pool, conn)
             except:
                 pass
         # Return empty list on error
@@ -1192,7 +1403,7 @@ def insert_sensor_data(sensor_db_id: int, value: float, status: str = 'normal', 
         conn.commit()
         rows_affected = cur.rowcount
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         
         if rows_affected > 0:
             import sys
@@ -1221,8 +1432,8 @@ def get_sensor_type_by_type(sensor_type: str):
     if pool is None:
         return None
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         cur.execute(
             """
             SELECT id, type_name, unit, default_min, default_max, description
@@ -1234,7 +1445,7 @@ def get_sensor_type_by_type(sensor_type: str):
         )
         row = cur.fetchone()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return row
     except Exception as e:
         print(f"MySQL get_sensor_type_by_type error: {e}")
@@ -1259,8 +1470,8 @@ def list_recent_sensor_data(limit: int = 100, user_id: int | None = None):
     if pool is None:
         return []
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         if user_id is not None:
             # Use user_id directly from sensor_data table (no JOIN needed)
             cur.execute(
@@ -1306,7 +1517,7 @@ def list_recent_sensor_data(limit: int = 100, user_id: int | None = None):
             )
         rows = cur.fetchall() or []
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         
         # Decrypt sensor values after retrieving from database
         import sys
@@ -1345,8 +1556,8 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
     if pool is None:
         return []
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         
         if user_id is not None:
             # Get all locations for this user's sensors, including NULL (will show as "Unassigned")
@@ -1365,7 +1576,7 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
         
         locations = [row['location'] for row in cur.fetchall()]
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         
         import sys
         print(f"DEBUG: get_locations_with_status - Found {len(locations)} locations for user_id {user_id}", file=sys.stderr)
@@ -1528,7 +1739,7 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
             
             rows = cur.fetchall()
             cur.close()
-            conn.close()
+            _return_connection(pool, conn)
             
             # Get latest metrics - prefer real-time data if available, otherwise use stored data
             encryption = get_db_encryption()
@@ -1639,7 +1850,7 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
             sensor_count_row = cur.fetchone()
             sensor_count = sensor_count_row['sensor_count'] if sensor_count_row else 0
             cur.close()
-            conn.close()
+            _return_connection(pool, conn)
             
             result.append({
                 'location': location,
@@ -1665,8 +1876,8 @@ def list_recent_sensor_data_by_location(location: str, limit: int = 200, user_id
     if pool is None:
         return []
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         
         # Build WHERE clause with date filtering
         where_clauses = []
@@ -1724,7 +1935,7 @@ def list_recent_sensor_data_by_location(location: str, limit: int = 200, user_id
         cur.execute(query, tuple(params))
         rows = cur.fetchall() or []
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         
         # Decrypt sensor values after retrieving from database
         import sys
@@ -1757,8 +1968,8 @@ def list_recent_water_readings(limit: int = 200):
     if pool is None:
         return []
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         cur.execute(
             """
             SELECT id, tds, ph, turbidity, created_at
@@ -1770,7 +1981,7 @@ def list_recent_water_readings(limit: int = 200):
         )
         rows = cur.fetchall() or []
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         
         # Decrypt sensor values after retrieving from database
         encryption = get_db_encryption()
@@ -1795,8 +2006,8 @@ def create_device_session(session_token: str, device_id: str, expires_at: dateti
     if pool is None:
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             INSERT INTO device_sessions (session_token, device_id, expires_at, counter)
@@ -1806,7 +2017,7 @@ def create_device_session(session_token: str, device_id: str, expires_at: dateti
         )
         conn.commit()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return True
     except Error as e:
         # Duplicate session token (shouldn't happen with proper generation)
@@ -1822,8 +2033,8 @@ def get_device_session(session_token: str):
     if pool is None:
         return None
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         cur.execute(
             """
             SELECT session_token, device_id, counter, expires_at, created_at, last_used_at
@@ -1835,7 +2046,7 @@ def get_device_session(session_token: str):
         )
         row = cur.fetchone()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return row
     except Exception as e:
         print(f"MySQL get_device_session error: {e}")
@@ -1848,8 +2059,8 @@ def update_device_session(session_token: str, counter: int, expires_at: datetime
     if pool is None:
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             UPDATE device_sessions
@@ -1861,7 +2072,7 @@ def update_device_session(session_token: str, counter: int, expires_at: datetime
         conn.commit()
         updated = cur.rowcount > 0
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return updated
     except Exception as e:
         print(f"MySQL update_device_session error: {e}")
@@ -1874,8 +2085,8 @@ def delete_device_session(session_token: str) -> bool:
     if pool is None:
         return False
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             DELETE FROM device_sessions WHERE session_token = %s
@@ -1885,7 +2096,7 @@ def delete_device_session(session_token: str) -> bool:
         conn.commit()
         deleted = cur.rowcount > 0
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return deleted
     except Exception as e:
         print(f"MySQL delete_device_session error: {e}")
@@ -1898,8 +2109,8 @@ def cleanup_expired_sessions() -> int:
     if pool is None:
         return 0
     try:
-        conn = pool.get_connection()
-        cur = conn.cursor()
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn)
         cur.execute(
             """
             DELETE FROM device_sessions WHERE expires_at < NOW()
@@ -1908,7 +2119,7 @@ def cleanup_expired_sessions() -> int:
         deleted_count = cur.rowcount
         conn.commit()
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         return deleted_count
     except Exception as e:
         print(f"MySQL cleanup_expired_sessions error: {e}")

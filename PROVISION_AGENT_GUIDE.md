@@ -92,23 +92,39 @@ python3 simulators/sensor/provision_agent.py
 nohup python3 simulators/sensor/provision_agent.py > provision_agent.log 2>&1 &
 ```
 
-**Or run as systemd service** (recommended for production):
+**Or run as systemd service** (recommended for production - auto-starts on boot):
+
+See **[PROVISION_AGENT_AUTOMATION.md](PROVISION_AGENT_AUTOMATION.md)** for complete automation setup with:
+- ✅ Auto-start on boot
+- ✅ Auto-restart on failure
+- ✅ Environment file configuration
+- ✅ Log management
+- ✅ Troubleshooting guide
+
+**Quick setup:**
 
 Create `/etc/systemd/system/provision-agent.service`:
 ```ini
 [Unit]
-Description=Water Monitor Provision Agent
+Description=IoT Water Monitor Provision Agent
 After=network.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=pi
+Group=pi
 WorkingDirectory=/home/pi/water-monitor
-Environment="MQTT_HOST=192.168.1.100"
+Environment="MQTT_HOST=your-mqtt-broker-host.com"
 Environment="MQTT_PORT=1883"
+Environment="MQTT_USER=your_mqtt_username"
+Environment="MQTT_PASSWORD=your_mqtt_password"
 ExecStart=/usr/bin/python3 /home/pi/water-monitor/simulators/sensor/provision_agent.py
 Restart=always
 RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=provision-agent
 
 [Install]
 WantedBy=multi-user.target
@@ -116,10 +132,13 @@ WantedBy=multi-user.target
 
 Enable and start:
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl enable provision-agent.service
 sudo systemctl start provision-agent.service
 sudo systemctl status provision-agent.service
 ```
+
+**For detailed automation guide, see:** `PROVISION_AGENT_AUTOMATION.md`
 
 ---
 

@@ -183,11 +183,57 @@
             transition: color 0.3s ease;
         }
         @media (max-width: 600px) {
-            .container { padding: 18px 10px; margin: 18px; }
-            h1 { font-size: 1.4rem; }
-            .reading-card { font-size: 1rem; padding: 12px 10px; }
-            .controls { flex-direction: column; }
-            .control-group { width: 100%; justify-content: center; }
+            .container { 
+                padding: 18px 12px; 
+                margin: 16px 12px; 
+            }
+            h1 { 
+                font-size: 1.4rem; 
+                margin-bottom: 6px;
+            }
+            .sub {
+                font-size: 0.85rem;
+                margin-bottom: 16px;
+            }
+            .reading-card { 
+                font-size: 1rem; 
+                padding: 14px 12px; 
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            .reading-value {
+                text-align: left;
+                min-width: unset;
+                width: 100%;
+            }
+            .controls { 
+                flex-direction: column; 
+                gap: 12px;
+                padding: 16px 12px;
+            }
+            .control-group { 
+                width: 100%; 
+                justify-content: center; 
+                flex-wrap: wrap;
+            }
+            .btn {
+                padding: 12px 16px;
+                font-size: 1rem;
+                min-height: 44px;
+                flex: 1;
+                min-width: 120px;
+            }
+            select {
+                font-size: 16px; /* Prevents zoom on iOS */
+                padding: 10px 12px;
+                min-height: 44px;
+                flex: 1;
+            }
+            .safe-status {
+                font-size: 0.95rem;
+                padding: 12px;
+            }
         }
     </style>
 </head>
