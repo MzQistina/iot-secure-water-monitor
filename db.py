@@ -31,7 +31,7 @@ print(f"DEBUG: Final DB_TYPE={DB_TYPE}")
 if DB_TYPE == 'postgresql':
     try:
         import psycopg2
-        from psycopg2 import pool, Error, errorcode
+        from psycopg2 import pool, Error
         from psycopg2.extras import RealDictCursor
         POSTGRESQL_AVAILABLE = True
         print(f"DEBUG: psycopg2 imported successfully, version: {psycopg2.__version__ if hasattr(psycopg2, '__version__') else 'unknown'}")
