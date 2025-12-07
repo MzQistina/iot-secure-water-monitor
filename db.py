@@ -5,7 +5,27 @@ import json
 from db_encryption import get_db_encryption
 
 # Detect database type from environment
-DB_TYPE = os.getenv('DB_TYPE', 'mysql').lower()
+DB_TYPE = os.getenv('DB_TYPE', '').lower()
+
+# Parse DATABASE_URL if provided (PostgreSQL style)
+DATABASE_URL = os.getenv('DATABASE_URL', '')
+
+# Auto-detect PostgreSQL if DATABASE_URL is provided or host looks like PostgreSQL
+if not DB_TYPE:
+    if DATABASE_URL and 'postgresql://' in DATABASE_URL:
+        DB_TYPE = 'postgresql'
+        print(f"DEBUG: Auto-detected PostgreSQL from DATABASE_URL")
+    else:
+        # Check if DB_HOST looks like PostgreSQL (Render PostgreSQL hosts start with 'dpg-')
+        db_host = os.getenv('DB_HOST', '')
+        if db_host.startswith('dpg-') or 'postgres' in db_host.lower():
+            DB_TYPE = 'postgresql'
+            print(f"DEBUG: Auto-detected PostgreSQL from DB_HOST: {db_host}")
+        else:
+            DB_TYPE = 'mysql'  # Default to MySQL
+            print(f"DEBUG: Auto-detected MySQL (default)")
+
+print(f"DEBUG: Final DB_TYPE={DB_TYPE}")
 
 # Support both MySQL and PostgreSQL
 if DB_TYPE == 'postgresql':
@@ -26,7 +46,6 @@ if DB_TYPE == 'mysql':
     from mysql.connector import pooling, Error, errorcode
 
 # Parse DATABASE_URL if provided (PostgreSQL style)
-DATABASE_URL = os.getenv('DATABASE_URL', '')
 if DATABASE_URL and DB_TYPE == 'postgresql':
     # Parse postgresql://user:password@host:port/dbname
     import urllib.parse
