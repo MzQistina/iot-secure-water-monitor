@@ -30,9 +30,9 @@ print(f"DEBUG: Final DB_TYPE={DB_TYPE}")
 # Support both MySQL and PostgreSQL
 if DB_TYPE == 'postgresql':
     try:
-        import psycopg2
-        from psycopg2 import pool, Error
-        from psycopg2.extras import RealDictCursor
+        import psycopg2  # type: ignore
+        from psycopg2 import pool, Error  # type: ignore
+        from psycopg2.extras import RealDictCursor  # type: ignore
         POSTGRESQL_AVAILABLE = True
         print(f"DEBUG: psycopg2 imported successfully, version: {psycopg2.__version__ if hasattr(psycopg2, '__version__') else 'unknown'}")
     except ImportError as e:
