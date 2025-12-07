@@ -46,6 +46,9 @@ from db import (
     update_device_session,
     delete_device_session,
     cleanup_expired_sessions,
+    _get_connection,
+    _return_connection,
+    _get_cursor,
 )
 
 app = Flask(__name__)
@@ -1292,25 +1295,25 @@ def dashboard():
     if not locations_data:
         print(f"WARNING: dashboard - No locations found for user_id {user_id}!", file=sys.stderr)
         # Check if user has sensors
-        from db import get_pool
+        from db import get_pool, _get_connection, _return_connection, _get_cursor
         pool = get_pool()
         if pool:
-            conn = pool.get_connection()
-            cur = conn.cursor(dictionary=True)
+            conn = _get_connection(pool)
+            cur = _get_cursor(conn, dictionary=True)
             cur.execute("SELECT COUNT(*) as count FROM sensors WHERE user_id = %s", (int(user_id),))
             sensor_count = cur.fetchone()['count']
             cur.close()
-            conn.close()
+            _return_connection(pool, conn)
             print(f"WARNING: dashboard - User {user_id} has {sensor_count} sensors but no locations!", file=sys.stderr)
             
             # Check sensor details
             if sensor_count > 0:
-                conn = pool.get_connection()
-                cur = conn.cursor(dictionary=True)
+                conn = _get_connection(pool)
+                cur = _get_cursor(conn, dictionary=True)
                 cur.execute("SELECT device_id, location, status FROM sensors WHERE user_id = %s LIMIT 10", (int(user_id),))
                 sensors = cur.fetchall()
                 cur.close()
-                conn.close()
+                _return_connection(pool, conn)
                 print(f"DEBUG: dashboard - Sample sensors for user {user_id}:", file=sys.stderr)
                 for s in sensors:
                     print(f"DEBUG: dashboard -   Sensor: {s.get('device_id')}, Location: {s.get('location')}, Status: {s.get('status')}", file=sys.stderr)
@@ -1354,11 +1357,11 @@ def api_dashboard_location(location):
     
     # STRICT: Verify that this location AND sensors belong to the user
     # Check if user has any sensors in this location (handle "Unassigned" for NULL locations)
-    from db import get_pool
+    from db import get_pool, _get_connection, _return_connection, _get_cursor
     pool = get_pool()
     if pool:
-        conn = pool.get_connection()
-        cur = conn.cursor(dictionary=True)
+        conn = _get_connection(pool)
+        cur = _get_cursor(conn, dictionary=True)
         location_filter = None if location == 'Unassigned' else location
         
         if location_filter:
@@ -1378,7 +1381,7 @@ def api_dashboard_location(location):
         result = cur.fetchone()
         sensor_count = result['count'] if result else 0
         cur.close()
-        conn.close()
+        _return_connection(pool, conn)
         
         print(f"DEBUG: api_dashboard_location - User {user_id} has {sensor_count} sensors in location '{location}'", file=sys.stderr)
         sys.stderr.flush()
@@ -1958,8 +1961,8 @@ def api_active_sensors():
             from db import get_pool
             pool = get_pool()
             if pool:
-                conn = pool.get_connection()
-                cur = conn.cursor(dictionary=True)
+                conn = _get_connection(pool)
+                cur = _get_cursor(conn, dictionary=True)
                 
                 # Get latest reading per device_id for this user
                 for sensor in user_sensors:
@@ -2012,7 +2015,7 @@ def api_active_sensors():
                         })
                 
                 cur.close()
-                conn.close()
+                _return_connection(pool, conn)
         
         print(f"DEBUG: api_active_sensors - Returning {len(active_sensors)} sensors", file=sys.stderr)
         sys.stderr.flush()
