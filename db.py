@@ -664,8 +664,8 @@ def get_pool():
                 test_conn = _pool.getconn()
                 _pool.putconn(test_conn)
             else:
-                test_conn = _pool.get_connection()
-                test_conn.close()
+                test_conn = _get_connection(_pool)
+                _return_connection(_pool, test_conn)
                 return _pool
         except Exception as e:
             print(f"WARNING: Existing pool is invalid, recreating: {e}")
@@ -718,10 +718,10 @@ def get_pool():
             print("DEBUG: MySQL connection pool created successfully")
             
             # Test the connection
-            _conn = _pool.get_connection()
+            _conn = _get_connection(_pool)
             print("DEBUG: Test connection obtained from pool")
             _ensure_schema(_conn)
-            _conn.close()
+            _return_connection(_pool, _conn)
             print("DEBUG: MySQL database connection pool initialized successfully")
             return _pool
         except Error as init_err:
@@ -743,7 +743,7 @@ def get_pool():
                         password=DB_PASSWORD,
                         database=DB_NAME,
                     )
-                    _conn = _pool.get_connection()
+                    _conn = _get_connection(_pool)
                     _ensure_schema(_conn)
                     _return_connection(_pool, _conn)
                     print("DEBUG: Database created and connection pool initialized")
@@ -1413,7 +1413,7 @@ def insert_sensor_data(sensor_db_id: int, value: float, status: str = 'normal', 
             print(f"ERROR: insert_sensor_data - encryption returned None for value: {value}")
             return False
         
-        conn = pool.get_connection()
+        conn = _get_connection(pool)
         
         # If user_id or device_id not provided, fetch from sensors table
         if user_id is None or device_id is None:
@@ -1624,27 +1624,27 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
         else:
             print(f"WARNING: get_locations_with_status - No locations found for user_id {user_id}", file=sys.stderr)
             # Check if user has any sensors at all
-            conn_check = pool.get_connection()
-            cur_check = conn_check.cursor(dictionary=True)
+            conn_check = _get_connection(pool)
+            cur_check = _get_cursor(conn_check, dictionary=True)
             if user_id is not None:
                 cur_check.execute("SELECT COUNT(*) as count FROM sensors WHERE user_id = %s", (int(user_id),))
             else:
                 cur_check.execute("SELECT COUNT(*) as count FROM sensors")
             sensor_count = cur_check.fetchone()['count']
             cur_check.close()
-            conn_check.close()
+            _return_connection(pool, conn_check)
             print(f"DEBUG: get_locations_with_status - User {user_id} has {sensor_count} total sensors", file=sys.stderr)
             if sensor_count > 0:
                 # Check if sensors have NULL location
-                conn_check2 = pool.get_connection()
-                cur_check2 = conn_check2.cursor(dictionary=True)
+                conn_check2 = _get_connection(pool)
+                cur_check2 = _get_cursor(conn_check2, dictionary=True)
                 if user_id is not None:
                     cur_check2.execute("SELECT COUNT(*) as count FROM sensors WHERE user_id = %s AND (location IS NULL OR location = '')", (int(user_id),))
                 else:
                     cur_check2.execute("SELECT COUNT(*) as count FROM sensors WHERE location IS NULL OR location = ''")
                 null_location_count = cur_check2.fetchone()['count']
                 cur_check2.close()
-                conn_check2.close()
+                _return_connection(pool, conn_check2)
                 print(f"DEBUG: get_locations_with_status - User {user_id} has {null_location_count} sensors with NULL/empty location", file=sys.stderr)
                 # If all sensors have NULL location, show "Unassigned"
                 if null_location_count == sensor_count:
@@ -1669,8 +1669,8 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
         # Get sensors by location for filtering real-time data
         sensors_by_location = {}
         if user_id is not None:
-            conn_sensors = pool.get_connection()
-            cur_sensors = conn_sensors.cursor(dictionary=True)
+            conn_sensors = _get_connection(pool)
+            cur_sensors = _get_cursor(conn_sensors, dictionary=True)
             cur_sensors.execute("""
                 SELECT device_id, device_type, location
                 FROM sensors
@@ -1678,7 +1678,7 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
             """, (int(user_id),))
             all_user_sensors = cur_sensors.fetchall()
             cur_sensors.close()
-            conn_sensors.close()
+            _return_connection(pool, conn_sensors)
             
             for sensor in all_user_sensors:
                 sensor_location = sensor.get('location') or 'Unassigned'
@@ -1726,8 +1726,8 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
                 sys.stderr.flush()
             
             if user_id is not None:
-                conn = pool.get_connection()
-                cur = conn.cursor(dictionary=True)
+                conn = _get_connection(pool)
+                cur = _get_cursor(conn, dictionary=True)
                 # IMPORTANT: Filter by BOTH sensor.user_id AND sensor_data.user_id
                 # This ensures only data from sensors owned by this user is shown
                 if location_filter:
@@ -1754,8 +1754,8 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
                         LIMIT 100
                     """, (int(user_id), int(user_id)))
             else:
-                conn = pool.get_connection()
-                cur = conn.cursor(dictionary=True)
+                conn = _get_connection(pool)
+                cur = _get_cursor(conn, dictionary=True)
                 if location_filter:
                     cur.execute("""
                         SELECT sd.value, s.device_type, sd.recorded_at
@@ -1855,8 +1855,8 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
                     reasons.append(f"{key} above maximum: {val} > {max_v}")
             
             # Count sensors in this location
-            conn = pool.get_connection()
-            cur = conn.cursor(dictionary=True)
+            conn = _get_connection(pool)
+            cur = _get_cursor(conn, dictionary=True)
             location_filter = None if location == 'Unassigned' else location
             
             if user_id is not None:
