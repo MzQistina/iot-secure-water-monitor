@@ -1023,9 +1023,10 @@ def create_sensor(
         conn = _get_connection(pool)
         cur = _get_cursor(conn)
         # Resolve sensor_type_id from sensor_type table
+        quote_char = '"' if DB_TYPE == 'postgresql' else '`'
         cur.execute(
-            """
-            SELECT id FROM `sensor_type` WHERE type_name = %s LIMIT 1
+            f"""
+            SELECT id FROM {quote_char}sensor_type{quote_char} WHERE type_name = %s LIMIT 1
             """,
             (device_type,)
         )
@@ -1303,7 +1304,8 @@ def seed_sensor_types_if_empty():
     try:
         conn = _get_connection(pool)
         cur = _get_cursor(conn)
-        cur.execute("SELECT COUNT(*) FROM `sensor_type`")
+        quote_char = '"' if DB_TYPE == 'postgresql' else '`'
+        cur.execute(f"SELECT COUNT(*) FROM {quote_char}sensor_type{quote_char}")
         row = cur.fetchone()
         count = int(row[0]) if row and row[0] is not None else 0
         if count == 0:
@@ -1347,8 +1349,11 @@ def list_sensor_types():
         conn = _get_connection(pool)
         cur = _get_cursor(conn, dictionary=True)
         
+        # Use correct quote character based on database type
+        quote_char = '"' if DB_TYPE == 'postgresql' else '`'
+        
         # Simple, direct query
-        cur.execute("SELECT id, type_name, unit, default_min, default_max, description FROM `sensor_type` ORDER BY type_name ASC")
+        cur.execute(f"SELECT id, type_name, unit, default_min, default_max, description FROM {quote_char}sensor_type{quote_char} ORDER BY type_name ASC")
         rows = cur.fetchall()
         
         # Convert to list and ensure it's not None
@@ -1475,10 +1480,11 @@ def get_sensor_type_by_type(sensor_type: str):
     try:
         conn = _get_connection(pool)
         cur = _get_cursor(conn, dictionary=True)
+        quote_char = '"' if DB_TYPE == 'postgresql' else '`'
         cur.execute(
-            """
+            f"""
             SELECT id, type_name, unit, default_min, default_max, description
-            FROM `sensor_type`
+            FROM {quote_char}sensor_type{quote_char}
             WHERE LOWER(type_name) = LOWER(%s)
             LIMIT 1
             """,
