@@ -177,6 +177,8 @@ def _ensure_schema(conn) -> None:
                     ("turbidity", "NTU", 0.0, 5.0, "Turbidity"),
                 ],
             )
+            # Commit the seeding transaction
+            conn.commit()
             # Consume any results after executemany
             try:
                 cur.fetchall()
