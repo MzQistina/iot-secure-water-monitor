@@ -185,8 +185,11 @@ def _ensure_schema(conn) -> None:
             print("Successfully seeded default sensor types")
         else:
             print(f"sensor_type table already has {count} entries")
-        # Ensure all results are consumed
-        cur.fetchall()  # Consume any remaining results
+        # Ensure all results are consumed (only if there are results)
+        try:
+            cur.fetchall()  # Consume any remaining results
+        except:
+            pass  # No results to fetch, that's okay
     except Exception as e:
         print(f"ERROR: Failed to seed sensor types: {e}")
         import traceback
@@ -579,6 +582,8 @@ def _ensure_schema(conn) -> None:
     # Device sessions table for secure device-server communication
     if DB_TYPE == 'postgresql':
         # PostgreSQL: Use trigger for ON UPDATE CURRENT_TIMESTAMP
+        # Note: No foreign key on device_id because it's not unique in sensors table
+        # (unique constraint is on user_id + device_id combination)
         cur.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {quote_char}device_sessions{quote_char} (
@@ -588,9 +593,7 @@ def _ensure_schema(conn) -> None:
                 counter INT DEFAULT 0,
                 expires_at {datetime_type} NOT NULL,
                 created_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
-                last_used_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT fk_device_sessions_device FOREIGN KEY (device_id)
-                    REFERENCES {quote_char}sensors{quote_char}(device_id) ON UPDATE CASCADE ON DELETE CASCADE
+                last_used_at {datetime_type} DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
