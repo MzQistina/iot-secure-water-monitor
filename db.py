@@ -584,9 +584,16 @@ def _ensure_schema(conn) -> None:
         # PostgreSQL: Use trigger for ON UPDATE CURRENT_TIMESTAMP
         # Note: No foreign key on device_id because it's not unique in sensors table
         # (unique constraint is on user_id + device_id combination)
+        # Drop table if it exists with wrong schema (has foreign key constraint)
+        try:
+            cur.execute(f"DROP TABLE IF EXISTS {quote_char}device_sessions{quote_char} CASCADE")
+            conn.commit()
+        except Exception:
+            pass  # Ignore errors, table might not exist
+        # Create table without foreign key constraint
         cur.execute(
             f"""
-            CREATE TABLE IF NOT EXISTS {quote_char}device_sessions{quote_char} (
+            CREATE TABLE {quote_char}device_sessions{quote_char} (
                 id {auto_inc} PRIMARY KEY,
                 session_token VARCHAR(255) NOT NULL UNIQUE,
                 device_id VARCHAR(100) NOT NULL,
