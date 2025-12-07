@@ -1,0 +1,333 @@
+<header id="app-header">
+    <div class="header-inner">
+        <div class="header-brand">Water Monitor</div>
+        <button id="menu-toggle" aria-controls="app-sidebar" aria-expanded="false" aria-label="Open menu">☰</button>
+    </div>
+    <div id="sidebar-backdrop"></div>
+    
+</header>
+<nav id="app-sidebar" class="sidebar">
+    <div class="brand">
+        <img src="{{ url_for('static', filename='favicon.ico') }}" alt="Logo" class="brand-logo">
+        <div class="brand-userbox">
+            <div class="brand-note">Welcome</div>
+            <span class="brand-user">{{ session.get('user') }}</span>
+        </div>
+    </div>
+    <div class="sb-divider"></div>
+    <a class="nav-link {{ 'active' if request.path == url_for('dashboard') else '' }}" href="{{ url_for('dashboard') }}">Dashboard</a>
+    <a class="nav-link {{ 'active' if request.path == url_for('readings') else '' }}" href="{{ url_for('readings') }}">Live Readings</a>
+    <a class="nav-link {{ 'active' if request.path == url_for('history') else '' }}" href="{{ url_for('history') }}">History</a>
+    
+    {% set sensors_section_active = (request.path == url_for('sensors')) or (request.path == url_for('sensors_register')) %}
+    <div class="nav-group sensors" data-open="{{ 'true' if sensors_section_active else 'false' }}">
+        <button class="nav-link nav-toggle {{ 'active' if sensors_section_active else '' }}" type="button" aria-expanded="{{ 'true' if sensors_section_active else 'false' }}" aria-controls="submenu-sensors">
+            Sensors
+            <span class="chevron">▸</span>
+        </button>
+        <div id="submenu-sensors" class="submenu">
+            <a class="nav-sublink {{ 'active' if request.path == url_for('sensors') else '' }}" href="{{ url_for('sensors') }}">Manage Sensors</a>
+            <a class="nav-sublink {{ 'active' if request.path == url_for('sensors_register') else '' }}" href="{{ url_for('sensors_register') }}">Register Sensor</a>
+        </div>
+    </div>
+    <a class="nav-link {{ 'active' if request.path == url_for('profile') else '' }}" href="{{ url_for('profile') }}">Profile</a>
+    <div class="dark-mode-toggle-wrapper" style="margin-top: auto; margin-bottom: 10px; padding: 10px 12px;">
+        <label class="toggle-switch" for="dark-mode-toggle-input">
+            <span class="toggle-label">
+                <span id="dark-mode-icon">🌙</span>
+                <span id="dark-mode-text">Dark Mode</span>
+            </span>
+            <input type="checkbox" id="dark-mode-toggle-input" aria-label="Toggle dark mode">
+            <span class="toggle-slider"></span>
+        </label>
+    </div>
+    <a class="nav-link logout-btn" href="{{ url_for('logout') }}">Logout</a>
+</nav>
+<style>
+    :root {
+        --sidebar-width: 240px;
+        /* Light mode colors */
+        --bg-primary: #f4f8fb;
+        --bg-secondary: #ffffff;
+        --bg-tertiary: #f8f9fa;
+        --text-primary: #2a4d69;
+        --text-secondary: #587a96;
+        --text-tertiary: #374151;
+        --text-muted: #999;
+        --border-color: #e6eef5;
+        --border-light: #eee;
+        --border-input: #ddd;
+        --sidebar-bg: #2a4d69;
+        --sidebar-active: #1e3b52;
+        --shadow: 0 2px 4px rgba(0,0,0,0.1);
+        --shadow-lg: 0 4px 16px rgba(0,0,0,0.08);
+    }
+    [data-theme="dark"] {
+        /* Dark mode colors */
+        --bg-primary: #0f172a;
+        --bg-secondary: #1e293b;
+        --bg-tertiary: #334155;
+        --text-primary: #f1f5f9;
+        --text-secondary: #cbd5e1;
+        --text-tertiary: #94a3b8;
+        --text-muted: #64748b;
+        --border-color: #334155;
+        --border-light: #475569;
+        --border-input: #475569;
+        --sidebar-bg: #1e293b;
+        --sidebar-active: #0f172a;
+        --shadow: 0 2px 4px rgba(0,0,0,0.3);
+        --shadow-lg: 0 4px 16px rgba(0,0,0,0.4);
+    }
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100vh;
+        width: var(--sidebar-width);
+        background: var(--sidebar-bg);
+        color: #fff;
+        display: flex;
+        flex-direction: column;
+        padding: 20px 16px;
+        box-sizing: border-box;
+        z-index: 1000;
+        border-right: 1px solid rgba(255,255,255,0.1);
+        transition: background-color 0.3s ease;
+    }
+    :root { --header-h: 56px; }
+    #app-header { 
+        position: fixed; 
+        inset: 0 0 auto 0; 
+        height: var(--header-h); 
+        background: var(--bg-secondary); 
+        border-bottom: 1px solid var(--border-color); 
+        z-index: 950;
+        transition: background-color 0.3s ease, border-color 0.3s ease;
+    }
+    #app-header .header-inner { height: 100%; display:flex; align-items:center; gap: 12px; padding: 0 14px; }
+    #app-header .header-brand { font-weight: 700; color: var(--text-primary); transition: color 0.3s ease; }
+    body {
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+        transition: background-color 0.3s ease, color 0.3s ease;
+    }
+    
+    #menu-toggle { 
+        display:none; 
+        margin-left: auto; 
+        background:var(--sidebar-bg); 
+        color:#fff; 
+        border:none; 
+        padding:8px 10px; 
+        border-radius:8px;
+        transition: background-color 0.3s ease;
+    }
+    #sidebar-backdrop { display:none; position:fixed; inset:0; background: rgba(0,0,0,0.35); z-index:900; }
+    .dark-mode-toggle-wrapper {
+        display: flex;
+        align-items: center;
+    }
+    .toggle-switch {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+        cursor: pointer;
+    }
+    .toggle-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #e9f1fa;
+        font-weight: 600;
+        font-size: 0.95rem;
+    }
+    .toggle-switch input[type="checkbox"] {
+        position: absolute;
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+    .toggle-slider {
+        position: relative;
+        width: 48px;
+        height: 24px;
+        background-color: rgba(255, 255, 255, 0.2);
+        border-radius: 24px;
+        transition: background-color 0.3s ease;
+        flex-shrink: 0;
+    }
+    .toggle-slider::before {
+        content: "";
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background-color: #fff;
+        top: 2px;
+        left: 2px;
+        transition: transform 0.3s ease;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    }
+    .toggle-switch input[type="checkbox"]:checked + .toggle-slider {
+        background-color: rgba(255, 255, 255, 0.35);
+    }
+    .toggle-switch input[type="checkbox"]:checked + .toggle-slider::before {
+        transform: translateX(24px);
+    }
+    .toggle-switch:hover .toggle-slider {
+        background-color: rgba(255, 255, 255, 0.25);
+    }
+    .toggle-switch input[type="checkbox"]:checked:hover + .toggle-slider {
+        background-color: rgba(255, 255, 255, 0.4);
+    }
+    .sidebar .brand { display:flex; align-items:center; justify-content:flex-start; margin-bottom: 8px; gap:14px; }
+    .sidebar .brand-logo { width: 56px; height: 56px; border-radius: 50%; display:block; object-fit: contain; background:#ffffff; padding: 6px; box-sizing: border-box; }
+    .sidebar .brand-userbox { display:flex; flex-direction: column; }
+    .sidebar .brand-note { color:#cfe2f3; font-size:0.78rem; letter-spacing:0.3px; opacity:0.95; margin-bottom: 2px; }
+    .sidebar .brand-user { color:#e9f1fa; font-weight: 800; font-size: 1.1rem; }
+    .sidebar .sb-divider { height:1px; background: rgba(255,255,255,0.15); margin: 10px 0 12px; }
+    .sidebar .user {
+        font-size: 0.95rem;
+        color: #cfe2f3;
+        margin-bottom: 18px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255,255,255,0.15);
+        word-break: break-word;
+    }
+    .sidebar .nav-link {
+        color: #e9f1fa;
+        text-decoration: none;
+        padding: 10px 12px;
+        border-radius: 8px;
+        margin-bottom: 6px;
+        transition: background 0.2s ease;
+        display: block;
+        font-weight: 600;
+    }
+    .sidebar .nav-link:hover {
+        background: rgba(255,255,255,0.12);
+    }
+    .sidebar .nav-link.active {
+        background: var(--sidebar-active);
+    }
+    .sidebar .logout-btn {
+        background: #d46a6a; /* toned-down red */
+        color: #fff;
+    }
+    .sidebar .logout-btn:hover {
+        background: #b85a5a; /* slightly darker on hover */
+    }
+    .sidebar .nav-group { margin-bottom: 6px; }
+    .sidebar .nav-toggle { width: 100%; text-align: left; background: transparent; cursor: pointer; }
+    .sidebar .nav-toggle .chevron { float: right; transition: transform 0.2s ease; }
+    .sidebar .submenu { display: none; padding-left: 6px; }
+    .sidebar .nav-sublink {
+        color: #e9f1fa;
+        text-decoration: none;
+        padding: 8px 12px 8px 20px;
+        border-radius: 8px;
+        margin-bottom: 6px;
+        transition: background 0.2s ease;
+        display: block;
+        font-weight: 600;
+        opacity: 0.95;
+    }
+    .sidebar .nav-sublink:hover { background: rgba(255,255,255,0.10); }
+    .sidebar .nav-sublink.active { background: var(--sidebar-active); }
+    .sidebar .nav-group[data-open="true"] .submenu { display: block; }
+    .sidebar .nav-group[data-open="true"] .nav-toggle .chevron { transform: rotate(90deg); }
+    body { 
+        margin-left: var(--sidebar-width); 
+        margin-top: var(--header-h);
+    }
+    @media (max-width: 900px) {
+        #menu-toggle { display:inline-block; }
+        .sidebar { transform: translateX(-100%); transition: transform 0.2s ease; }
+        .sidebar.open { transform: translateX(0); }
+        #sidebar-backdrop.active { display:block; }
+        body { margin-left: 0; }
+    }
+</style>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function(){
+        // Dark mode functionality
+        const darkModeToggle = document.getElementById('dark-mode-toggle-input');
+        const darkModeIcon = document.getElementById('dark-mode-icon');
+        const darkModeText = document.getElementById('dark-mode-text');
+        
+        // Load saved theme preference
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        const isDark = savedTheme === 'dark';
+        document.documentElement.setAttribute('data-theme', savedTheme);
+        if (darkModeToggle) {
+            darkModeToggle.checked = isDark;
+        }
+        updateDarkModeUI(isDark);
+        
+        function updateDarkModeUI(isDark) {
+            if (isDark) {
+                darkModeIcon.textContent = '☀️';
+                darkModeText.textContent = 'Light Mode';
+            } else {
+                darkModeIcon.textContent = '🌙';
+                darkModeText.textContent = 'Dark Mode';
+            }
+        }
+        
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('change', function() {
+                const newTheme = this.checked ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', newTheme);
+                localStorage.setItem('theme', newTheme);
+                updateDarkModeUI(this.checked);
+            });
+        }
+        
+        // Sensors submenu toggle
+        var group = document.querySelector('.nav-group.sensors');
+        if (!group) return;
+        var toggle = group.querySelector('.nav-toggle');
+        if (!toggle) return;
+        toggle.addEventListener('click', function(){
+            var isOpen = group.getAttribute('data-open') === 'true';
+            group.setAttribute('data-open', isOpen ? 'false' : 'true');
+            toggle.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
+        });
+        
+        // Mobile menu toggle
+        var btn = document.getElementById('menu-toggle');
+        var sidebar = document.getElementById('app-sidebar');
+        var backdrop = document.getElementById('sidebar-backdrop');
+        function setOpenState(open){
+            if (!btn || !sidebar) return;
+            if (open) {
+                sidebar.classList.add('open');
+                btn.setAttribute('aria-expanded', 'true');
+                btn.textContent = '✕';
+                if (backdrop) backdrop.classList.add('active');
+                document.body.classList.add('menu-open');
+            } else {
+                sidebar.classList.remove('open');
+                btn.setAttribute('aria-expanded', 'false');
+                btn.textContent = '☰';
+                if (backdrop) backdrop.classList.remove('active');
+                document.body.classList.remove('menu-open');
+            }
+        }
+        if (btn && sidebar) {
+            btn.addEventListener('click', function(){
+                var open = sidebar.classList.contains('open');
+                setOpenState(!open);
+            });
+            if (backdrop) {
+                backdrop.addEventListener('click', function(){ setOpenState(false); });
+            }
+        }
+    });
+</script>
+
+

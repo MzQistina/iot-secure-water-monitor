@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>IoT Dashboard - Water Monitor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <script>
+        // Apply theme immediately before page renders to prevent white flash
+        (function() {
+            const theme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: var(--bg-primary);
+            margin: 0;
+            padding: 0;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 20px;
+        }
+        h1 {
+            color: var(--text-primary);
+            margin-bottom: 8px;
+            transition: color 0.3s ease;
+        }
+        .sub {
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            transition: color 0.3s ease;
+        }
+        .controls {
+            background: var(--bg-secondary);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            margin-bottom: 20px;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .location-selector, .time-range-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .location-selector label, .time-range-selector label {
+            font-weight: 600;
+            color: var(--text-primary);
+            transition: color 0.3s ease;
+        }
+        .location-selector select, .time-range-selector select {
+            padding: 8px 12px;
+            border: 1px solid var(--border-input);
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 200px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        #customRangeContainer {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        #customRangeContainer input[type="datetime-local"] {
+            padding: 8px 12px;
+            border: 1px solid var(--border-input);
+            border-radius: 4px;
+            font-size: 14px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        #applyCustomRange {
+            padding: 8px 16px;
+            background: #2a4d69;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        #applyCustomRange:hover {
+            background: #1e3b52;
+        }
+        #liveStatusBadge {
+            margin-bottom: 20px;
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        #statusIndicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #9ca3af;
+        }
+        #statusIndicator.live {
+            background: #22c55e;
+            animation: pulse 2s infinite;
+        }
+        #statusIndicator.offline {
+            background: #ef4444;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        #statusText {
+            font-weight: 600;
+            color: var(--text-tertiary);
+            transition: color 0.3s ease;
+        }
+        .summary-table {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            margin-bottom: 20px;
+            overflow-x: auto;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-light);
+            color: var(--text-primary);
+            transition: border-color 0.3s ease, color 0.3s ease;
+        }
+        th {
+            background: var(--bg-tertiary);
+            font-weight: 600;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        tr:hover {
+            background: var(--bg-tertiary);
+            transition: background-color 0.3s ease;
+        }
+        .status-safe {
+            color: #22c55e;
+            font-weight: 600;
+        }
+        .status-unsafe {
+            color: #ef4444;
+            font-weight: 600;
+        }
+        .chart-container {
+            background: var(--bg-secondary);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        .chart-title {
+            color: var(--text-primary);
+            font-weight: 700;
+            margin-bottom: 16px;
+            font-size: 1.2rem;
+            transition: color 0.3s ease;
+        }
+        .chart-wrap {
+            height: 300px;
+            position: relative;
+        }
+        #chartsContainer {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+        @media (max-width: 1200px) {
+            #chartsContainer {
+                grid-template-columns: 1fr;
+            }
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+            transition: color 0.3s ease;
+        }
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+            transition: color 0.3s ease;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    {% include 'sidebar.html' ignore missing %}
+    <div class="container">
+        <h1>Water Quality Dashboard</h1>
+        <div class="sub">Monitor sensor data by location with safety status</div>
+
+        <!-- Controls and Status -->
+        <div class="controls">
+            <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
+                <div class="location-selector">
+                    <label for="locationSelect">Select Location:</label>
+                    <select id="locationSelect">
+                        {% if locations %}
+                            {% for loc_data in locations %}
+                                <option value="{{ loc_data.location }}" {% if loc_data.location == default_location %}selected{% endif %}>
+                                    {{ loc_data.location }} ({{ loc_data.sensor_count }} sensors)
+                                </option>
+                            {% endfor %}
+                        {% else %}
+                            <option value="">No locations available</option>
+                        {% endif %}
+                    </select>
+                </div>
+                <div class="time-range-selector">
+                    <label for="timeRangeSelect">Time Range:</label>
+                    <select id="timeRangeSelect">
+                        <option value="1h">Last 1 hour</option>
+                        <option value="today" selected>Today</option>
+                        <option value="7d">Last 7 days</option>
+                        <option value="30d">Last 30 days</option>
+                        <option value="custom">Custom range</option>
+                    </select>
+                </div>
+                <div id="customRangeContainer" style="display: none;">
+                    <label for="dateFrom">From:</label>
+                    <input type="datetime-local" id="dateFrom">
+                    <label for="dateTo">To:</label>
+                    <input type="datetime-local" id="dateTo">
+                    <button id="applyCustomRange">Apply</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Status Badge -->
+        <div id="liveStatusBadge">
+            <span id="statusIndicator"></span>
+            <span id="statusText">Checking status...</span>
+        </div>
+
+        <!-- Summary Table -->
+        <div class="summary-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Location</th>
+                        <th>Sensors</th>
+                        <th>Status</th>
+                        <th>Latest Metrics</th>
+                        <th>Issues</th>
+                    </tr>
+                </thead>
+                <tbody id="summaryTableBody">
+                    {% for loc_data in locations %}
+                    <tr>
+                        <td><strong>{{ loc_data.location }}</strong></td>
+                        <td>{{ loc_data.sensor_count }}</td>
+                        <td>
+                            {% if loc_data.safe %}
+                                <span class="status-safe">SAFE ✓</span>
+                            {% else %}
+                                <span class="status-unsafe">UNSAFE ✗</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if loc_data.latest_metrics %}
+                                {% for metric, value in loc_data.latest_metrics.items() %}
+                                    {{ metric.upper() }}: {{ "%.2f"|format(value) }}{% if not loop.last %}, {% endif %}
+                                {% endfor %}
+                            {% else %}
+                                No data
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if loc_data.reasons %}
+                                {{ loc_data.reasons|join(', ') }}
+                            {% else %}
+                                None
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+    </div>
+
+        <!-- Charts Container (2x2 Grid) -->
+        <div id="chartsContainer">
+            <!-- Charts will be dynamically created here -->
+        </div>
+    </div>
+
+    <script>
+        let chartInstances = {};
+        const locationSelect = document.getElementById('locationSelect');
+        const timeRangeSelect = document.getElementById('timeRangeSelect');
+        const customRangeContainer = document.getElementById('customRangeContainer');
+        const dateFrom = document.getElementById('dateFrom');
+        const dateTo = document.getElementById('dateTo');
+        const applyCustomRange = document.getElementById('applyCustomRange');
+        const chartsContainer = document.getElementById('chartsContainer');
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusText = document.getElementById('statusText');
+
+        let loadTimeout = null;
+        let currentTimeRange = 'today';
+        let customDateFrom = null;
+        let customDateTo = null;
+
+        // Calculate date range based on selection
+// Helper to get local ISO string (YYYY-MM-DDTHH:mm)
+function toLocalISOString(date) {
+            const offset = date.getTimezoneOffset() * 60000; // offset in milliseconds
+            const localDate = new Date(date.getTime() - offset);
+            return localDate.toISOString().slice(0, 16);
+        }
+
+        // Calculate date range based on selection
+        function getDateRange(range) {
+            const now = new Date();
+            let from, to = toLocalISOString(now);
+            
+            // Helper to get start of today
+            function getStartOfToday() {
+                const start = new Date(now);
+                start.setHours(0, 0, 0, 0);
+                return toLocalISOString(start);
+            }
+
+            switch(range) {
+                case '1h':
+                    from = toLocalISOString(new Date(now.getTime() - 60 * 60 * 1000));
+                    break;
+                case 'today':
+                    from = getStartOfToday();
+                    break;
+                case '7d':
+                    from = toLocalISOString(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
+                    break;
+                case '30d':
+                    from = toLocalISOString(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
+                    break;
+                case 'custom':
+                    if (customDateFrom && customDateTo) {
+                        from = customDateFrom;
+                        to = customDateTo;
+                    } else {
+                        from = getStartOfToday();
+                    }
+                    break;
+                default:
+                    from = getStartOfToday();
+            }
+            console.log('getDateRange:', range, 'from:', from, 'to:', to);
+            return { from, to };
+        }
+        // Update live status badge
+        function updateLiveStatus(isLive) {
+            if (isLive) {
+                statusIndicator.className = 'live';
+                statusText.textContent = 'Live - Receiving real-time data';
+                statusText.style.color = '#22c55e';
+            } else {
+                statusIndicator.className = 'offline';
+                statusText.textContent = 'Offline - Data may be outdated (older than 5 minutes)';
+                statusText.style.color = '#ef4444';
+            }
+        }
+
+        // Handle time range selection
+        timeRangeSelect.addEventListener('change', function() {
+            currentTimeRange = this.value;
+            if (this.value === 'custom') {
+                customRangeContainer.style.display = 'flex';
+            } else {
+                customRangeContainer.style.display = 'none';
+                loadLocationData(locationSelect.value);
+            }
+        });
+
+        // Handle custom range apply
+        applyCustomRange.addEventListener('click', function() {
+            customDateFrom = dateFrom.value;
+            customDateTo = dateTo.value;
+            if (customDateFrom && customDateTo) {
+                loadLocationData(locationSelect.value);
+            }
+        });
+
+        function clearAllCharts() {
+            Object.values(chartInstances).forEach(chart => {
+                if (chart) chart.destroy();
+            });
+            chartInstances = {};
+        }
+
+        function loadLocationData(location) {
+            if (!location) {
+                clearAllCharts();
+                chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No location selected</div></div>';
+                return;
+            }
+
+            if (loadTimeout) clearTimeout(loadTimeout);
+
+            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">Loading data...</div></div>';
+            statusText.textContent = 'Loading...';
+            statusIndicator.className = '';
+
+            const dateRange = getDateRange(currentTimeRange);
+            const params = new URLSearchParams({
+                from: dateRange.from,
+                to: dateRange.to
+            });
+
+            loadTimeout = setTimeout(() => {
+                fetch(`/api/dashboard/location/${encodeURIComponent(location)}?${params}`)
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.json().then(err => {
+                                throw new Error(err.error || `HTTP ${response.status}`);
+                            });
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        console.log('API response:', data);
+                        console.log('Labels count:', data.labels ? data.labels.length : 0);
+                        console.log('Datasets count:', data.datasets ? data.datasets.length : 0);
+                        console.log('Row count:', data.row_count || 0);
+                        console.log('Point count:', data.point_count || 0);
+                        
+                        if (!data.labels || data.labels.length === 0) {
+                            console.warn('No labels in response');
+                            let debugInfo = 'Row count: ' + (data.row_count || 0);
+                            debugInfo += ', Point count: ' + (data.point_count || 0);
+                            debugInfo += ', Time buckets: ' + (data.time_buckets || 0);
+                            debugInfo += ', Metrics: ' + ((data.metrics_present && data.metrics_present.length > 0) ? data.metrics_present.join(', ') : 'none');
+                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No data available (no labels)</div><div style="padding: 10px; color: #666; font-size: 12px;">' + debugInfo + '</div></div>';
+                            updateLiveStatus(false);
+                            return;
+                        }
+                        
+                        if (!data.datasets || data.datasets.length === 0) {
+                            console.warn('No datasets in response');
+                            let debugInfo = 'Labels: ' + (data.labels ? data.labels.length : 0);
+                            debugInfo += ', Metrics: ' + ((data.metrics_present && data.metrics_present.length > 0) ? data.metrics_present.join(', ') : 'none');
+                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No sensor data (no datasets)</div><div style="padding: 10px; color: #666; font-size: 12px;">' + debugInfo + '</div></div>';
+                            updateLiveStatus(false);
+                            return;
+                        }
+                        
+                        updateLiveStatus(data.is_live || false);
+                        updateAllCharts(data);
+                    })
+                    .catch(error => {
+                        chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">Error: ' + error.message + '</div></div>';
+                        updateLiveStatus(false);
+                    });
+            }, 300);
+        }
+
+        function updateAllCharts(data) {
+            clearAllCharts();
+            chartsContainer.innerHTML = '';
+            
+            if (!data || !data.labels || data.labels.length === 0 || !data.datasets) {
+                chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No data available</div></div>';
+                return;
+            }
+
+            const sensorDatasets = data.datasets.filter(ds => 
+                ds.metric !== 'safety_safe' && ds.metric !== 'safety_unsafe'
+            );
+            const safetyDatasets = data.datasets.filter(ds => 
+                ds.metric === 'safety_safe' || ds.metric === 'safety_unsafe'
+            );
+
+            // Calculate max data points based on time range
+            const maxPoints = calculateMaxDataPoints(currentTimeRange);
+            const labels = data.labels || [];
+            const optimizedLabels = labels.length > maxPoints ? 
+                labels.filter((_, i) => i % Math.ceil(labels.length / maxPoints) === 0 || i === labels.length - 1) :
+                labels;
+
+            // Create sensor charts (limit to 3 for 2x2 grid)
+            const sensorsToShow = sensorDatasets.slice(0, 3);
+            sensorsToShow.forEach((dataset, index) => {
+                const chartId = 'chart_' + dataset.metric;
+                const chartContainer = document.createElement('div');
+                chartContainer.className = 'chart-container';
+                chartContainer.innerHTML = `
+                    <div class="chart-title">${dataset.label || dataset.metric}</div>
+                    <div class="chart-wrap">
+                        <canvas id="${chartId}"></canvas>
+                    </div>
+                `;
+                chartsContainer.appendChild(chartContainer);
+
+                const ctx = document.getElementById(chartId).getContext('2d');
+                const optimizedData = optimizeDataPoints(dataset.data || [], labels, optimizedLabels);
+                
+                chartInstances[dataset.metric] = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: optimizedLabels,
+                        datasets: [{
+                            label: dataset.label || dataset.metric,
+                            data: optimizedData,
+                            borderColor: dataset.color || '#0ea5e9',
+                            backgroundColor: dataset.color || '#0ea5e9',
+                    borderWidth: 2,
+                            pointRadius: 0,
+                            pointHoverRadius: 4,
+                    tension: 0.2,
+                    spanGaps: true,
+                            fill: false
+                        }]
+                    },
+                    options: getChartOptions(dataset.label || 'Value')
+                });
+            });
+
+            // Create safety status chart (bar/step chart)
+// Create safety status chart (bar/step chart)
+if (data.safety_status && data.safety_status.length > 0) {
+                const safetyChartId = 'chart_safety';
+                const safetyContainer = document.createElement('div');
+                safetyContainer.className = 'chart-container';
+                safetyContainer.innerHTML = `
+                    <div class="chart-title">Safety Status Timeline</div>
+                    <div class="chart-wrap">
+                        <canvas id="${safetyChartId}"></canvas>
+                    </div>
+                `;
+                chartsContainer.appendChild(safetyContainer);
+
+                const safetyCtx = document.getElementById(safetyChartId).getContext('2d');
+                
+                const optimizedSafetyData = optimizeDataPoints(
+                    data.safety_status, 
+                    labels, 
+                    optimizedLabels
+                );
+
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                const textColor = isDark ? '#cbd5e1' : '#374151';
+                const gridColor = isDark ? '#475569' : '#e5e7eb';
+
+                chartInstances['safety'] = new Chart(safetyCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: optimizedLabels,
+                        datasets: [{
+                            label: 'Safety Status',
+                            data: optimizedSafetyData, // Pass raw numbers (1 or 0)
+                            backgroundColor: optimizedSafetyData.map(v => 
+                                v === 1 ? '#22c55e' : '#ef4444'
+                            ),
+                            borderColor: optimizedSafetyData.map(v => 
+                                v === 1 ? '#16a34a' : '#dc2626'
+                            ),
+                            borderWidth: 1,
+                            barPercentage: 1.0,
+                            categoryPercentage: 1.0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                backgroundColor: isDark ? 'rgba(30, 41, 59, 0.9)' : 'rgba(255, 255, 255, 0.9)',
+                                titleColor: textColor,
+                                bodyColor: textColor,
+                                borderColor: gridColor,
+                                borderWidth: 1,
+                                callbacks: {
+                                    label: function(context) {
+                                        return context.raw === 1 ? 'Status: Safe' : 'Status: Unsafe';
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: {
+                                    maxRotation: 45,
+                                    autoSkip: true,
+                                    maxTicksLimit: 15,
+                                    font: { size: 10 },
+                                    color: textColor
+                                },
+                                title: { 
+                                    display: true, 
+                                    text: 'Date',
+                                    color: textColor
+                                },
+                                grid: {
+                                    color: gridColor
+                                }
+                            },
+                            y: {
+                                ticks: {
+                                    font: { size: 10 },
+                                    stepSize: 1,
+                                    color: textColor,
+                                    callback: function(value) {
+                                        if (value === 1) return 'Safe';
+                                        if (value === 0) return 'Unsafe';
+                                        return '';
+                                    }
+                                },
+                                min: 0,
+                                max: 1,
+                                title: { 
+                                    display: true, 
+                                    text: 'Safety Status',
+                                    color: textColor
+                                },
+                                grid: {
+                                    color: gridColor
+                                }
+                            }
+                        },
+                        animation: false
+                    }
+                });
+            }        }
+
+        function calculateMaxDataPoints(range) {
+            switch(range) {
+                case '1h': return 60;      // 1 point per minute max
+                case 'today': return 96;    // 1 point per 15 minutes max
+                case '7d': return 168;      // 1 point per hour max
+                case '30d': return 180;     // 1 point per 4 hours max
+                case 'custom': return 200;  // Max 200 points
+                default: return 100;
+            }
+        }
+
+        function optimizeDataPoints(data, originalLabels, optimizedLabels) {
+            if (data.length !== originalLabels.length) return data;
+            if (originalLabels.length === optimizedLabels.length) return data;
+            
+            const indices = optimizedLabels.map(label => originalLabels.indexOf(label));
+            return indices.map(i => data[i]);
+        }
+
+        function getChartOptions(yAxisTitle) {
+            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+            const textColor = isDark ? '#cbd5e1' : '#374151';
+            const gridColor = isDark ? '#475569' : '#e5e7eb';
+            
+            return {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { 
+                        display: true, 
+                        position: 'top',
+                        labels: { color: textColor }
+                    },
+                    tooltip: { 
+                        intersect: false, 
+                        mode: 'index',
+                        backgroundColor: isDark ? 'rgba(30, 41, 59, 0.9)' : 'rgba(255, 255, 255, 0.9)',
+                        titleColor: textColor,
+                        bodyColor: textColor,
+                        borderColor: gridColor,
+                        borderWidth: 1
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: {
+                            maxRotation: 45,
+                            autoSkip: true,
+                            maxTicksLimit: 15,
+                            font: { size: 10 },
+                            color: textColor
+                        },
+                        title: { 
+                            display: true, 
+                            text: 'Date',
+                            color: textColor
+                        },
+                        grid: {
+                            color: gridColor
+                        }
+                    },
+                    y: {
+                        beginAtZero: false,
+                        title: { 
+                            display: true, 
+                            text: yAxisTitle,
+                            color: textColor
+                        },
+                        ticks: { 
+                            font: { size: 10 },
+                            color: textColor
+                        },
+                        grid: {
+                            color: gridColor
+                        }
+                    }
+                },
+                animation: false,
+                interaction: { intersect: false, mode: 'index' }
+            };
+        }
+
+        // Function to update charts when theme changes
+        function updateChartsTheme() {
+            Object.values(chartInstances).forEach(chart => {
+                if (chart && chart.options) {
+                    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                    const textColor = isDark ? '#cbd5e1' : '#374151';
+                    const gridColor = isDark ? '#475569' : '#e5e7eb';
+                    
+                    if (chart.options.scales) {
+                        if (chart.options.scales.x) {
+                            chart.options.scales.x.ticks.color = textColor;
+                            chart.options.scales.x.title.color = textColor;
+                            chart.options.scales.x.grid.color = gridColor;
+                        }
+                        if (chart.options.scales.y) {
+                            chart.options.scales.y.ticks.color = textColor;
+                            chart.options.scales.y.title.color = textColor;
+                            chart.options.scales.y.grid.color = gridColor;
+                        }
+                    }
+                    if (chart.options.plugins) {
+                        if (chart.options.plugins.legend && chart.options.plugins.legend.labels) {
+                            chart.options.plugins.legend.labels.color = textColor;
+                        }
+                        if (chart.options.plugins.tooltip) {
+                            chart.options.plugins.tooltip.backgroundColor = isDark ? 'rgba(30, 41, 59, 0.9)' : 'rgba(255, 255, 255, 0.9)';
+                            chart.options.plugins.tooltip.titleColor = textColor;
+                            chart.options.plugins.tooltip.bodyColor = textColor;
+                            chart.options.plugins.tooltip.borderColor = gridColor;
+                        }
+                    }
+                    chart.update('none');
+                }
+            });
+        }
+        
+        // Listen for theme changes
+        const observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+                    updateChartsTheme();
+                }
+            });
+        });
+        observer.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ['data-theme']
+        });
+
+        // Initialize
+        if (locationSelect.value) {
+            loadLocationData(locationSelect.value);
+        } else {
+            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No locations available</div></div>';
+        }
+
+        locationSelect.addEventListener('change', function() {
+            loadLocationData(this.value);
+        });
+    </script>
+    {% include 'footer.html' ignore missing %}
+</body>
+</html>

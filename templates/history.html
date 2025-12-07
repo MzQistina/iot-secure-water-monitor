@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>History Readings - Water Monitor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <script>
+        // Apply theme immediately before page renders to prevent white flash
+        (function() {
+            const theme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: var(--bg-primary);
+            margin: 0;
+            padding: 0;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 24px auto 40px;
+            background: transparent;
+            padding: 0 20px;
+        }
+        h1 {
+            color: var(--text-primary);
+            margin: 0 0 6px;
+            font-size: 2rem;
+            font-weight: 700;
+            transition: color 0.3s ease;
+        }
+        .sub {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            margin-bottom: 0;
+            transition: color 0.3s ease;
+        }
+        .card {
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            box-shadow: var(--shadow);
+            padding: 24px;
+            margin-top: 20px;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { 
+            text-align: left; 
+            padding: 12px; 
+            border-bottom: 1px solid var(--border-light); 
+            color: var(--text-primary);
+            transition: border-color 0.3s ease, color 0.3s ease;
+        }
+        thead th { 
+            background: var(--bg-tertiary); 
+            color: var(--text-primary); 
+            font-weight: 600;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        tbody tr:hover { background: var(--bg-tertiary); transition: background-color 0.3s ease; }
+        .badge { 
+            display: inline-block; 
+            padding: 4px 8px; 
+            border-radius: 4px; 
+            font-size: 0.8rem; 
+            font-weight: 600;
+        }
+        .badge-normal { background: #d1fae5; color: #065f46; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-critical { background: #fee2e2; color: #991b1b; }
+        .muted { color: var(--text-muted); transition: color 0.3s ease; }
+        .filter-form { 
+            display: grid; 
+            grid-template-columns: repeat(3, 1fr); 
+            gap: 12px; 
+            margin-bottom: 20px;
+            align-items: end;
+        }
+        .filter-form label { 
+            color: var(--text-primary); 
+            font-weight:600; 
+            margin-bottom:6px; 
+            display:block; 
+            transition: color 0.3s ease;
+        }
+        .filter-form select,
+        .filter-form input[type="text"],
+        .filter-form input[type="date"] { 
+            background: var(--bg-secondary); 
+            width: 100%; 
+            height: 40px; 
+            border:1px solid var(--border-input); 
+            border-radius:8px; 
+            padding:8px 12px; 
+            box-sizing: border-box;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        .search-field-wrapper {
+            position: relative;
+        }
+        .search-field-wrapper input[type="text"] {
+            padding-left: 12px;
+            padding-right: 36px;
+            transition: all 0.2s ease;
+        }
+        .search-field-wrapper input[type="text"]:focus {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+            outline: none;
+        }
+        .search-clear {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            font-size: 18px;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 4px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.2s ease;
+            z-index: 1;
+        }
+        .search-clear:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+        }
+        .search-clear.visible {
+            display: flex;
+        }
+        .filter-form .search-field-wrapper {
+            grid-column: 1 / -1;
+        }
+        .filter-form .actions {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 10px;
+        }
+        .filter-form button[type="submit"] {
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .filter-form a {
+            background: var(--bg-secondary);
+            color: var(--text-secondary);
+            text-decoration: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            display: inline-block;
+            transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+        }
+        @media (max-width: 980px) {
+            .filter-form { grid-template-columns: 1fr 1fr; }
+            .filter-form .actions { grid-column: 1 / -1; }
+        }
+        @media (max-width: 560px) {
+            .filter-form { grid-template-columns: 1fr; }
+        }
+        .pagination { 
+            display:flex; 
+            justify-content:center; 
+            gap:6px; 
+            flex-wrap:wrap; 
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid var(--border-light);
+            transition: border-color 0.3s ease;
+        }
+        .pagination .page-link { 
+            background: var(--bg-secondary); 
+            border:1px solid var(--border-color); 
+            padding:8px 12px; 
+            border-radius:6px; 
+            color: var(--text-secondary); 
+            text-decoration:none; 
+            font-weight:600;
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        .pagination .page-link:hover:not(.disabled):not(.active) { 
+            background: var(--bg-tertiary);
+        }
+        .pagination .page-link.active { 
+            background:#2563eb; 
+            color:#fff; 
+            border-color:#2563eb;
+        }
+        .pagination .page-link.disabled { 
+            opacity:0.4; 
+            pointer-events:none;
+        }
+        .per-page {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border-light);
+            transition: border-color 0.3s ease;
+        }
+        .per-page form {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .per-page select {
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border-input);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    {% include 'sidebar.html' %}
+    <div class="container">
+        <h1>History Readings</h1>
+        <div class="sub">Recent per-sensor readings and statuses</div>
+
+        <form method="get" class="filter-form">
+            <div>
+                <label for="type">Type</label>
+                <select id="type" name="type">
+                    <option value="">All</option>
+                    {% for t in device_types %}
+                        <option value="{{ t }}" {% if type_filter and t==type_filter|lower %}selected{% endif %}>{{ t|upper }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="status">Status</label>
+                <select id="status" name="status">
+                    <option value="">All</option>
+                    {% for s in statuses %}
+                        <option value="{{ s }}" {% if status_filter and s==status_filter|lower %}selected{% endif %}>{{ s.title() }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="location">Location</label>
+                <select id="location" name="location">
+                    <option value="">All</option>
+                    {% for loc in locations %}
+                        <option value="{{ loc }}" {% if location_filter and loc|lower==location_filter|lower %}selected{% endif %}>{{ loc }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label for="date_from">Date From</label>
+                <input id="date_from" name="date_from" type="date" value="{{ date_from or '' }}">
+            </div>
+            <div>
+                <label for="date_to">Date To</label>
+                <input id="date_to" name="date_to" type="date" value="{{ date_to or '' }}">
+            </div>
+            <div class="search-field-wrapper">
+                <label for="q">Search</label>
+                <input id="q" name="q" type="text" value="{{ q or '' }}" placeholder="Search device, type, or location" autocomplete="off">
+                <button type="button" class="search-clear" id="search-clear-btn" onclick="clearSearch()" aria-label="Clear search">×</button>
+            </div>
+            <div class="actions">
+                <button type="submit">Apply Filters</button>
+                <a href="{{ url_for('history') }}">Reset</a>
+            </div>
+        </form>
+
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Recorded At</th>
+                        <th>Device</th>
+                        <th>Type</th>
+                        <th>Location</th>
+                        <th>Value</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if sensor_rows and sensor_rows|length > 0 %}
+                        {% for row in sensor_rows %}
+                            {% set st = (row.status or 'normal')|lower %}
+                            <tr>
+                                <td>
+                                    {% if row.recorded_at %}
+                                        {{ row.recorded_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                                    {% else %}-{% endif %}
+                                </td>
+                                <td>{{ row.device_id or '-' }}</td>
+                                <td class="muted">{{ (row.device_type or '-')|upper }}</td>
+                                <td class="muted">{{ row.location or '-' }}</td>
+                                <td>
+                                    {% set t = (row.device_type or '')|lower %}
+                                    {% if t == 'tds' %}
+                                        {{ row.value if row.value is not none else '-' }} ppm
+                                    {% elif t == 'turbidity' %}
+                                        {{ row.value if row.value is not none else '-' }} NTU
+                                    {% elif t == 'temperature' %}
+                                        {{ row.value if row.value is not none else '-' }} °C
+                                    {% elif t == 'dissolved_oxygen' %}
+                                        {{ row.value if row.value is not none else '-' }} mg/L
+                                    {% elif t == 'conductivity' %}
+                                        {{ row.value if row.value is not none else '-' }} µS/cm
+                                    {% else %}
+                                        {{ row.value if row.value is not none else '-' }}
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if st == 'critical' %}
+                                        <span class="badge badge-critical">Critical</span>
+                                    {% elif st == 'warning' %}
+                                        <span class="badge badge-warning">Warning</span>
+                                    {% else %}
+                                        <span class="badge badge-normal">Normal</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr><td colspan="6" style="text-align: center; padding: 40px;">No readings found</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="per-page">
+            <div>
+                Found: <strong>{{ total or 0 }}</strong> reading{{ 's' if (total or 0) != 1 else '' }}
+            </div>
+            <div>
+                <form method="get">
+                    <label for="per">Per page:</label>
+                    <select id="per" name="per" onchange="this.form.submit()">
+                        <option value="10" {% if (per or 20)|int == 10 %}selected{% endif %}>10</option>
+                        <option value="20" {% if (per or 20)|int == 20 %}selected{% endif %}>20</option>
+                        <option value="30" {% if (per or 20)|int == 30 %}selected{% endif %}>30</option>
+                        <option value="50" {% if (per or 20)|int == 50 %}selected{% endif %}>50</option>
+                    </select>
+                    <input type="hidden" name="q" value="{{ q or '' }}">
+                    <input type="hidden" name="type" value="{{ type_filter or '' }}">
+                    <input type="hidden" name="status" value="{{ status_filter or '' }}">
+                    <input type="hidden" name="location" value="{{ location_filter or '' }}">
+                    <input type="hidden" name="date_from" value="{{ date_from or '' }}">
+                    <input type="hidden" name="date_to" value="{{ date_to or '' }}">
+                    <input type="hidden" name="page" value="1">
+                </form>
+            </div>
+        </div>
+
+        {% if total_pages and total_pages > 1 %}
+        <div class="pagination">
+            {% set current = page or 1 %}
+            {% set pages = total_pages or 1 %}
+            {% set start_page = (current - 2) if (current - 2) > 1 else 1 %}
+            {% set end_page = (start_page + 4) if (start_page + 4) < pages else pages %}
+            {% if end_page - start_page < 4 and pages > 5 %}
+                {% set start_page = (end_page - 4) if (end_page - 4) > 1 else 1 %}
+            {% endif %}
+
+            {% if current == 1 %}
+                <span class="page-link disabled">First</span>
+            {% else %}
+                <a class="page-link" href="?page=1&per={{ per or 20 }}&q={{ (q or '')|urlencode }}&type={{ (type_filter or '')|urlencode }}&status={{ (status_filter or '')|urlencode }}&location={{ (location_filter or '')|urlencode }}&date_from={{ (date_from or '')|urlencode }}&date_to={{ (date_to or '')|urlencode }}">First</a>
+            {% endif %}
+            
+            {% if current == 1 %}
+                <span class="page-link disabled">Prev</span>
+            {% else %}
+                <a class="page-link" href="?page={{ current - 1 }}&per={{ per or 20 }}&q={{ (q or '')|urlencode }}&type={{ (type_filter or '')|urlencode }}&status={{ (status_filter or '')|urlencode }}&location={{ (location_filter or '')|urlencode }}&date_from={{ (date_from or '')|urlencode }}&date_to={{ (date_to or '')|urlencode }}">Prev</a>
+            {% endif %}
+
+            {% for p in range(start_page, end_page + 1) %}
+                {% if p == current %}
+                    <span class="page-link active">{{ p }}</span>
+                {% else %}
+                    <a class="page-link" href="?page={{ p }}&per={{ per or 20 }}&q={{ (q or '')|urlencode }}&type={{ (type_filter or '')|urlencode }}&status={{ (status_filter or '')|urlencode }}&location={{ (location_filter or '')|urlencode }}&date_from={{ (date_from or '')|urlencode }}&date_to={{ (date_to or '')|urlencode }}">{{ p }}</a>
+                {% endif %}
+            {% endfor %}
+
+            {% if current == pages %}
+                <span class="page-link disabled">Next</span>
+            {% else %}
+                <a class="page-link" href="?page={{ current + 1 }}&per={{ per or 20 }}&q={{ (q or '')|urlencode }}&type={{ (type_filter or '')|urlencode }}&status={{ (status_filter or '')|urlencode }}&location={{ (location_filter or '')|urlencode }}&date_from={{ (date_from or '')|urlencode }}&date_to={{ (date_to or '')|urlencode }}">Next</a>
+            {% endif %}
+            
+            {% if current == pages %}
+                <span class="page-link disabled">Last</span>
+            {% else %}
+                <a class="page-link" href="?page={{ pages }}&per={{ per or 20 }}&q={{ (q or '')|urlencode }}&type={{ (type_filter or '')|urlencode }}&status={{ (status_filter or '')|urlencode }}&location={{ (location_filter or '')|urlencode }}&date_from={{ (date_from or '')|urlencode }}&date_to={{ (date_to or '')|urlencode }}">Last</a>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+    <script>
+        // Search bar improvements
+        (function() {
+            const searchInput = document.getElementById('q');
+            const clearBtn = document.getElementById('search-clear-btn');
+            
+            if (!searchInput || !clearBtn) return;
+            
+            // Show/hide clear button based on input value
+            function updateClearButton() {
+                if (searchInput.value.trim()) {
+                    clearBtn.classList.add('visible');
+                } else {
+                    clearBtn.classList.remove('visible');
+                }
+            }
+            
+            // Initial state
+            updateClearButton();
+            
+            // Update on input
+            searchInput.addEventListener('input', updateClearButton);
+            
+            // Allow Enter key to submit form
+            searchInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const form = searchInput.closest('form');
+                    if (form) form.submit();
+                }
+            });
+        })();
+        
+        function clearSearch() {
+            const searchInput = document.getElementById('q');
+            if (searchInput) {
+                searchInput.value = '';
+                searchInput.focus();
+                const clearBtn = document.getElementById('search-clear-btn');
+                if (clearBtn) clearBtn.classList.remove('visible');
+            }
+        }
+    </script>
+    {% include 'footer.html' ignore missing %}
+</body>
+</html>

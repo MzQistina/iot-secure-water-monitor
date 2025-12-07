@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register - Water Monitoring</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <style>
+        body { 
+            font-family: 'Segoe UI', Arial, sans-serif; 
+            background: #f4f8fb url("{{ url_for('static', filename='background.svg') }}") no-repeat center center fixed; 
+            background-size: cover;
+            margin: 0;
+            min-height: 100vh;
+        }
+        .container { 
+            max-width: 460px; 
+            margin: 60px auto; 
+            background: #fff; 
+            border-radius: 12px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 4px 16px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.08); 
+            padding: 32px 24px;
+            position: relative;
+            z-index: 1;
+        }
+        h1 { text-align: center; color: #2a4d69; margin-bottom: 24px; }
+        .field { margin-bottom: 16px; }
+        label { display: block; color: #355972; margin-bottom: 8px; font-weight: 600; }
+        input[type="text"], input[type="password"], input[type="email"] { width: 100%; padding: 12px 10px; border: 1px solid #cfd9e3; border-radius: 8px; font-size: 1rem; box-sizing: border-box; }
+        .btn { width: 100%; background: #2a4d69; color: #fff; border: none; padding: 12px; border-radius: 8px; font-size: 1rem; cursor: pointer; }
+        .btn:hover { background: #1e3b52; }
+        .error { background: #ffe3e3; color: #b02a37; border: 1px solid #ffb3b3; padding: 10px 12px; border-radius: 8px; margin-bottom: 16px; }
+        .note { color: #5b748c; font-size: 0.92rem; text-align: center; margin-top: 14px; }
+        .link { text-align:center; margin-top: 14px; }
+        .link a { color:#2a4d69; text-decoration:none; font-weight:600; }
+        .input-wrap { position: relative; }
+        .input-wrap input { padding-right: 2.5rem; }
+        .toggle-visibility { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: transparent; border: 0; cursor: pointer; padding: 4px; color: #355972; appearance: none; -webkit-appearance: none; -moz-appearance: none; z-index: 3; }
+        .toggle-visibility:focus { outline: none; box-shadow: none; }
+        .toggle-visibility svg { width: 20px; height: 20px; display: block; }
+        .toggle-visibility .icon-open { display: none; }
+        .toggle-visibility .icon-closed { display: inline; }
+        .toggle-visibility.showing .icon-open { display: inline; }
+        .toggle-visibility.showing .icon-closed { display: none; }
+    </style>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self';">
+</head>
+<body>
+    <div class="container">
+        <h1>Create account</h1>
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="{{ url_for('register', next=next) }}" autocomplete="off">
+            <input type="hidden" name="next" value="{{ next }}">
+            <div class="field">
+                <label for="email">Email</label>
+                <input id="email" name="email" type="email" maxlength="255" required pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}" title="Please enter a valid email address">
+            </div>
+            <div class="field">
+                <label for="name">Full name</label>
+                <input id="name" name="name" type="text" minlength="2" maxlength="255" required pattern="[a-zA-Z\s'-.]{2,}" title="Name can only contain letters, spaces, hyphens, apostrophes, and periods">
+            </div>
+            <div class="field">
+                <label for="username">Username</label>
+                <input id="username" name="username" type="text" minlength="3" maxlength="150" required pattern="[a-zA-Z0-9_-]{3,150}" title="Username can only contain letters, numbers, underscores, and hyphens (3-150 characters)">
+            </div>
+            <div class="field">
+                <label for="password">Password</label>
+                <div class="input-wrap">
+                    <input id="password" name="password" type="password" minlength="8" maxlength="128" required pattern="^(?=.*[a-zA-Z])(?=.*[0-9]).{8,}$" title="Password must be at least 8 characters and contain at least one letter and one number">
+                    <button type="button" class="toggle-visibility" aria-label="Show password" data-target="password">
+                        <svg class="icon-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                        <svg class="icon-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path>
+                            <path d="M3 3l18 18"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="field">
+                <label for="confirm">Confirm Password</label>
+                <div class="input-wrap">
+                    <input id="confirm" name="confirm" type="password" minlength="8" maxlength="128" required>
+                    <button type="button" class="toggle-visibility" aria-label="Show password" data-target="confirm">
+                        <svg class="icon-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                        <svg class="icon-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path>
+                            <path d="M3 3l18 18"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <button type="submit" class="btn">Register</button>
+        </form>
+        <div class="link">Already have an account? <a href="{{ url_for('login') }}">Sign in</a></div>
+        <div class="note">Passwords are stored hashed for security.</div>
+    </div>
+</body>
+</html>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        try {
+            var buttons = document.querySelectorAll('.toggle-visibility');
+            buttons.forEach(function(btn){
+                try {
+                    var targetId = btn.getAttribute('data-target');
+                    var input = document.getElementById(targetId);
+                    if (!input) return;
+                    btn.addEventListener('click', function(e){
+                        try {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            var isPassword = input.type === 'password';
+                            input.type = isPassword ? 'text' : 'password';
+                            btn.setAttribute('aria-label', isPassword ? 'Hide password' : 'Show password');
+                            if (input.type === 'text') {
+                                btn.classList.add('showing');
+                            } else {
+                                btn.classList.remove('showing');
+                            }
+                        } catch(err) {
+                            console.error('Password toggle error:', err);
+                        }
+                    });
+                } catch(err) {
+                    console.error('Button setup error:', err);
+                }
+            });
+        } catch(err) {
+            console.error('DOMContentLoaded error:', err);
+        }
+    });
+</script>
+
+

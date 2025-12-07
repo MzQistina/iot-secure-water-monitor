@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register Sensor - Water Monitoring</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <script>
+        // Apply theme immediately before page renders to prevent white flash
+        (function() {
+            const theme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg-primary); margin: 0; color: var(--text-primary); transition: background-color 0.3s ease, color 0.3s ease; }
+        .container { max-width: 900px; margin: 30px auto; background: var(--bg-secondary); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 24px; position: relative; z-index: 1; transition: background-color 0.3s ease, box-shadow 0.3s ease; }
+        h1 { color: var(--text-primary); margin: 0 0 6px; transition: color 0.3s ease; }
+        .subtitle { color: var(--text-secondary); margin-bottom: 20px; transition: color 0.3s ease; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .grid-1 { display: grid; grid-template-columns: 1fr; gap: 14px; }
+        .field label { display:block; color: var(--text-primary); font-weight:600; margin-bottom:6px; transition: color 0.3s ease; }
+        input[type="text"], select, textarea { width:100%; padding: 10px; border:1px solid var(--border-input); border-radius:8px; box-sizing: border-box; font-size:1rem; background: var(--bg-secondary); color: var(--text-primary); transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
+        select { 
+            appearance: auto; 
+            -webkit-appearance: menulist; 
+            -moz-appearance: menulist; 
+            cursor: pointer;
+            background-color: var(--bg-secondary);
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23355972' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 35px;
+        }
+        select:focus { 
+            outline: 2px solid #2a4d69; 
+            outline-offset: 2px;
+            border-color: #2a4d69;
+        }
+        textarea { min-height: 100px; font-family: monospace; }
+        .row-actions { margin-top: 10px; display:flex; gap:10px; align-items:center; }
+        .btn { background:#2a4d69; color:#fff; border:none; padding: 12px 18px; border-radius:8px; cursor:pointer; }
+        .btn:hover { background:#1e3b52; }
+        .error { background:#ffe3e3; color:#b02a37; border:1px solid #ffb3b3; padding:10px 12px; border-radius:8px; margin-bottom: 12px; }
+        .success { background:#e9f7ef; color:#1e6b3a; border:1px solid #b7e1c1; padding:10px 12px; border-radius:8px; margin-bottom: 12px; }
+        @media (max-width: 800px){
+            .grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    {% include 'sidebar.html' %}
+    <div class="container">
+        <h1>Register Sensor</h1>
+        <div class="subtitle">Add a new IoT sensor and keys</div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, msg in messages %}
+                <div class="success">{{ msg }}</div>
+            {% endfor %}
+        {% endif %}
+        {% endwith %}
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('sensors_register') }}" autocomplete="off">
+            <div class="grid">
+                <div class="field">
+                    <label for="device_id">Device ID</label>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <input id="device_id" name="device_id" type="text" minlength="3" maxlength="100" required pattern="[a-zA-Z0-9_.-]{3,100}" title="Device ID can only contain letters, numbers, underscores, hyphens, and dots (3-100 characters)" style="flex:1;">
+                        <button type="button" id="request_key_btn" class="btn" style="padding:10px 16px; white-space:nowrap; font-size:0.9rem;">Request Key</button>
+                    </div>
+                    <div style="color: var(--text-muted); font-size:0.85rem; margin-top:4px;">Enter device ID and click "Request Key" to generate keys on Raspberry Pi</div>
+                </div>
+                <div class="field">
+                    <label for="device_type">Sensor Type</label>
+                    <select id="device_type" name="device_type" required onchange="onTypeChange(this.value)">
+                        <option value="">-- select sensor type --</option>
+                        {% if sensor_types %}
+                            {% for t in sensor_types %}
+                                {% if t.type_name %}
+                                <option value="{{ t.type_name }}" {% if selected_type == t.type_name %}selected{% endif %}>{{ t.type_name }}</option>
+                                {% endif %}
+                            {% endfor %}
+                        {% endif %}
+                        {% if not sensor_types or sensor_types|length == 0 %}
+                            <option value="" disabled>No sensor types available</option>
+                        {% endif %}
+                    </select>
+                    {% if not sensor_types or sensor_types|length == 0 %}
+                    <div style="color:#b02a37; font-size:0.85rem; margin-top:4px;">
+                        ⚠️ No sensor types found. Please check database or add sensor types first.
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="field">
+                    <label for="location">Location (optional)</label>
+                    <input id="location" name="location" type="text" maxlength="255" pattern="[a-zA-Z0-9\s.,\-_()]{1,255}" title="Location can contain letters, numbers, spaces, and common punctuation" placeholder="e.g., Plant Room A">
+                </div>
+                <div class="field">
+                    <label for="status">Status</label>
+                    <select id="status" name="status">
+                        <option value="active">active</option>
+                        <option value="inactive">inactive</option>
+                        <option value="revoked">revoked</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid">
+                <div class="field">
+                    <label for="device_id">&nbsp;</label>
+                    <div></div>
+                </div>
+                <div class="field">
+                    <label for="device_id">&nbsp;</label>
+                    <div></div>
+                </div>
+            </div>
+
+            <div class="grid-1">
+                <div class="field">
+                    <label for="public_key">Public Key (PEM)</label>
+                    <textarea id="public_key" name="public_key" placeholder="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"></textarea>
+                    <div style="color:#5b748c; font-size:0.9rem; margin-top:6px;">Your device will publish its key automatically. Paste manually only if needed.</div>
+                    <div style="color:#5b748c; font-size:0.9rem; margin-top:6px;">Required only when status is <strong>active</strong>. You can register as inactive first.</div>
+                    <div id="key_status" style="color:#355972; font-size:0.95rem; margin-top:8px;"></div>
+                </div>
+            </div>
+
+            <div class="grid-1">
+                <div class="field" style="background:#f7fbff; padding:14px; border-radius:8px;">
+                    <label>Threshold for Selected Type</label>
+                    <div style="color:#5b748c; margin-bottom:8px;">Default: <span id="def_min">{{ default_min if default_min is not none else '-' }}</span> to <span id="def_max">{{ default_max if default_max is not none else '-' }}</span></div>
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <label><input type="checkbox" id="type_use_default" name="type_use_default" checked onchange="toggleTypeInputs()"> Use default threshold</label>
+                        <div>
+                            <label for="type_min" style="display:block; font-weight:600;">Min</label>
+                            <input type="number" step="any" id="type_min" name="type_min" disabled>
+                        </div>
+                        <div>
+                            <label for="type_max" style="display:block; font-weight:600;">Max</label>
+                            <input type="number" step="any" id="type_max" name="type_max" disabled>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            
+
+            
+
+            <div class="row-actions">
+                <button type="submit" class="btn">Register Sensor</button>
+                <a class="link" href="{{ url_for('dashboard') }}" style="color:#2a4d69; font-weight:600; text-decoration:none;">Cancel</a>
+            </div>
+        </form>
+    </div>
+    <script>
+        async function onTypeChange(val){
+            // Update default min/max from API without reloading
+            try{
+                if (!val){
+                    document.getElementById('def_min').textContent = '-';
+                    document.getElementById('def_max').textContent = '-';
+                    return;
+                }
+                const res = await fetch("{{ url_for('api_sensor_type') }}?type=" + encodeURIComponent(val), { cache: 'no-store' });
+                if (!res.ok){ 
+                    throw new Error('not found'); 
+                }
+                const data = await res.json();
+                const dmin = (data && data.default_min) != null ? data.default_min : '-';
+                const dmax = (data && data.default_max) != null ? data.default_max : '-';
+                document.getElementById('def_min').textContent = dmin;
+                document.getElementById('def_max').textContent = dmax;
+            }catch(e){
+                // Silently handle errors - just reset to defaults
+                try {
+                    document.getElementById('def_min').textContent = '-';
+                    document.getElementById('def_max').textContent = '-';
+                } catch(domErr) {
+                    // Ignore DOM errors
+                }
+            }
+        }
+        function toggleTypeInputs(){
+            var cb = document.getElementById('type_use_default');
+            var minEl = document.getElementById('type_min');
+            var maxEl = document.getElementById('type_max');
+            var useDefault = cb && cb.checked;
+            if (minEl) minEl.disabled = useDefault;
+            if (maxEl) maxEl.disabled = useDefault;
+        }
+        document.addEventListener('DOMContentLoaded', function(){
+            toggleTypeInputs();
+            var sel = document.getElementById('device_type');
+            // Debug: Check if dropdown has options
+            if (sel) {
+                console.log('Sensor type dropdown found, options count:', sel.options.length);
+                var optionsList = [];
+                for (var i = 0; i < sel.options.length; i++) {
+                    optionsList.push({value: sel.options[i].value, text: sel.options[i].text});
+                }
+                console.log('Dropdown options:', optionsList);
+                if (sel.options.length <= 1) {
+                    console.warn('Warning: Sensor type dropdown has no options. Check server logs for sensor_types data.');
+                }
+            } else {
+                console.error('Error: Sensor type dropdown element not found!');
+            }
+            if (sel && sel.value){ onTypeChange(sel.value); }
+            // Manual key generation via button click
+            var devInput = document.getElementById('device_id');
+            var requestKeyBtn = document.getElementById('request_key_btn');
+            var _lastRequestedDeviceId = null;
+            
+            // Function to request key generation (called by button click)
+            function requestKeyGeneration() {
+                var deviceId = (devInput.value || '').trim();
+                
+                // Validate device ID
+                if (!deviceId || deviceId.length < 3) {
+                    alert('Please enter a device ID (at least 3 characters)');
+                    if (devInput) devInput.focus();
+                    return;
+                }
+                
+                // Prevent duplicate requests for same device_id
+                if (_lastRequestedDeviceId === deviceId) {
+                    if (typeof checkKeyStatus === 'function') {
+                        checkKeyStatus(deviceId);
+                    }
+                    return;
+                }
+                
+                // Update button state
+                if (requestKeyBtn) {
+                    requestKeyBtn.disabled = true;
+                    requestKeyBtn.textContent = 'Requesting...';
+                    requestKeyBtn.style.opacity = '0.7';
+                    requestKeyBtn.style.cursor = 'not-allowed';
+                }
+                
+                var statusEl = document.getElementById('key_status');
+                if (statusEl) {
+                    statusEl.textContent = 'Requesting key generation...';
+                    statusEl.style.color = '#355972';
+                }
+                
+                _lastRequestedDeviceId = deviceId;
+                
+                // Fire a provision request to the device via MQTT (backend publishes)
+                var provisionUrl = "{{ url_for('api_provision_request') }}";
+                fetch(provisionUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device_id: deviceId })
+                }).then(function(response) {
+                    if (!response.ok) {
+                        throw new Error('Request failed: ' + response.status);
+                    }
+                    return response.json();
+                }).then(function(data) {
+                    if (statusEl) {
+                        statusEl.textContent = 'Key generation requested. Waiting for key...';
+                        statusEl.style.color = '#1e6b3a';
+                    }
+                    
+                    // Start checking for key status after a delay
+                    setTimeout(function(){
+                        var currentDev = (devInput.value || '').trim();
+                        if (currentDev === deviceId && currentDev.length >= 3){
+                            checkKeyStatus(currentDev);
+                            // Keep checking periodically for the key to arrive
+                            startAutoPendingWatcher();
+                        }
+                    }, 1500);
+                }).catch(function(e){
+                    console.error('Provision request error:', e);
+                    if (statusEl) {
+                        statusEl.textContent = 'Error requesting key: ' + e.message;
+                        statusEl.style.color = '#b02a37';
+                    }
+                    // Reset flag on error so user can retry
+                    if (_lastRequestedDeviceId === deviceId) {
+                        _lastRequestedDeviceId = null;
+                    }
+                }).finally(function(){
+                    // Re-enable button after a short delay
+                    setTimeout(function(){
+                        if (requestKeyBtn) {
+                            requestKeyBtn.disabled = false;
+                            requestKeyBtn.textContent = 'Request Key';
+                            requestKeyBtn.style.opacity = '1';
+                            requestKeyBtn.style.cursor = 'pointer';
+                        }
+                    }, 2000);
+                });
+            }
+            
+            // Attach click event to button
+            if (requestKeyBtn) {
+                requestKeyBtn.addEventListener('click', function(e){
+                    e.preventDefault();
+                    e.stopPropagation();
+                    requestKeyGeneration();
+                });
+            }
+            
+            // Allow Enter key to trigger button click
+            if (devInput) {
+                devInput.addEventListener('keypress', function(e){
+                    if (e.key === 'Enter' && requestKeyBtn) {
+                        e.preventDefault();
+                        requestKeyGeneration();
+                    }
+                });
+            }
+            
+            // Function to check key status and auto-fill if available
+            function checkKeyStatus(deviceId){
+                if (!deviceId || deviceId.length < 3) return;
+                var statusEl = document.getElementById('key_status');
+                if (statusEl) statusEl.textContent = 'Checking for uploaded key...';
+                
+                fetch("{{ url_for('api_key_upload_status') }}?device_id=" + encodeURIComponent(deviceId), { cache: 'no-store' })
+                    .then(res => {
+                        if (!res.ok) {
+                            console.error('Key status check failed:', res.status, res.statusText);
+                            if (statusEl) statusEl.textContent = 'Error checking key status.';
+                            return null;
+                        }
+                        return res.json();
+                    })
+                    .then(sj => {
+                        if (sj && sj.received){
+                            if (statusEl) statusEl.textContent = 'Key found! Fetching...';
+                            fetch("{{ url_for('api_key_upload_fetch') }}?device_id=" + encodeURIComponent(deviceId), { cache: 'no-store' })
+                                .then(res => {
+                                    if (!res.ok) {
+                                        console.error('Key fetch failed:', res.status, res.statusText);
+                                        if (statusEl) statusEl.textContent = 'Key found but fetch failed.';
+                                        return null;
+                                    }
+                                    return res.json();
+                                })
+                                .then(fj => {
+                                    var pk = (fj && fj.public_key) || '';
+                                    var ta = document.getElementById('public_key');
+                                    if (pk && ta && (!ta.value || ta.value.trim()==='')){
+                                        ta.value = pk;
+                                        if (statusEl) statusEl.textContent = '✅ Key auto-filled from device.';
+                                    } else if (pk && ta && ta.value.trim() !== ''){
+                                        if (statusEl) statusEl.textContent = 'Key available (already filled).';
+                                    } else {
+                                        if (statusEl) statusEl.textContent = 'Key found but empty.';
+                                    }
+                                })
+                                .catch(e => { 
+                                    console.error('Key fetch error:', e);
+                                    if (statusEl) statusEl.textContent = 'Error fetching key.';
+                                });
+                        } else {
+                            if (statusEl) statusEl.textContent = 'No key uploaded yet. Waiting for device...';
+                        }
+                    })
+                    .catch(e => { 
+                        console.error('Key status check error:', e);
+                        if (statusEl) statusEl.textContent = 'Error checking key status.';
+                    });
+            }
+            
+            // Passive watcher: check pending keys via API (works with MQTT uploads)
+            var _autoWatcher = null;
+            function startAutoPendingWatcher(){
+                    if (_autoWatcher){ clearInterval(_autoWatcher); }
+                    _autoWatcher = setInterval(async function(){
+                        var dev = (devInput.value || '').trim();
+                        if (!dev || dev.length < 3){ return; }
+                        try{
+                            var sres = await fetch("{{ url_for('api_key_upload_status') }}?device_id=" + encodeURIComponent(dev), { cache: 'no-store' });
+                            if (sres.ok){
+                                var sj = await sres.json();
+                                if (sj && sj.received){
+                                    var fres = await fetch("{{ url_for('api_key_upload_fetch') }}?device_id=" + encodeURIComponent(dev), { cache: 'no-store' });
+                                    if (fres.ok){
+                                        var fj = await fres.json();
+                                        var pk = (fj && fj.public_key) || '';
+                                        var ta = document.getElementById('public_key');
+                                        if (pk && ta && (!ta.value || ta.value.trim()==='')){
+                                            ta.value = pk;
+                                            var st = document.getElementById('key_status');
+                                            if (st){ st.textContent = 'Key auto-filled from device.'; }
+                                        }
+                                    }
+                                }
+                            }
+                        }catch(e){ /* ignore transient errors */ }
+                    }, 1500);
+            }
+            
+            // Watcher is only started after button click (see requestKeyGeneration function)
+            // It checks for keys that were already generated, not triggering new requests
+        });
+        
+    </script>
+    {% include 'footer.html' ignore missing %}
+</body>
+</html>
+
+

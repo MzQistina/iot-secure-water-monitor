@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sensors - Water Monitoring</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <script>
+        // Apply theme immediately before page renders to prevent white flash
+        (function() {
+            const theme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg-primary); margin: 0; color: var(--text-primary); transition: background-color 0.3s ease, color 0.3s ease; }
+        .container { max-width: 1100px; margin: 30px auto; background: var(--bg-secondary); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 24px; transition: background-color 0.3s ease, box-shadow 0.3s ease; }
+        h1 { color: var(--text-primary); margin: 0 0 10px; transition: color 0.3s ease; }
+        .subtitle { color: var(--text-secondary); margin-bottom: 18px; transition: color 0.3s ease; }
+        .toolbar { display:flex; justify-content: space-between; align-items:center; margin-bottom: 12px; gap:10px; flex-wrap:wrap; }
+        .btn { background:#2a4d69; color:#fff; border:none; padding: 10px 14px; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block; }
+        .btn:hover { background:#1e3b52; }
+        .filters { display:flex; gap:10px; align-items:center; }
+        .filters input, .filters select { padding:8px 10px; border:1px solid var(--border-input); border-radius:8px; background: var(--bg-secondary); color: var(--text-primary); transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
+        .table-wrap { overflow:auto; border:1px solid var(--border-color); border-radius:10px; transition: border-color 0.3s ease; }
+        table { width: 100%; border-collapse: collapse; min-width:960px; }
+        th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border-light); color: var(--text-primary); transition: border-color 0.3s ease, color 0.3s ease; }
+        thead th { position: sticky; top: 0; z-index: 1; }
+        th { color: var(--text-primary); font-weight:700; background: var(--bg-tertiary); transition: background-color 0.3s ease, color 0.3s ease; }
+        tbody tr:nth-child(4n+1), tbody tr:nth-child(4n+2) { background: var(--bg-secondary); }
+        tbody tr:nth-child(4n+3), tbody tr:nth-child(4n+4) { background: var(--bg-secondary); }
+        tbody tr:hover { background: var(--bg-tertiary); transition: background-color 0.3s ease; }
+        .pill { display:inline-block; padding: 4px 8px; border-radius: 999px; font-size: 0.85rem; font-weight: 700; }
+        .pill.active { background:#d4f5e9; color:#217a4d; border:1px solid #b2e6d2; }
+        .pill.inactive { background:#ffecc7; color:#8a5a00; border:1px solid #ffd591; }
+        .pill.revoked { background:#ffe3e3; color:#b02a37; border:1px solid #ffb3b3; }
+        .empty { color: var(--text-secondary); background: var(--bg-tertiary); border:1px dashed var(--border-color); padding: 18px; border-radius: 8px; text-align:center; margin-top: 12px; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; }
+        .nowrap { white-space: nowrap; }
+        .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; }
+        .actions { text-align:right; }
+        /* Modal styles */
+        .modal { position: fixed; inset: 0; display:none; align-items: center; justify-content: center; background: rgba(0,0,0,0.35); padding: 0; z-index: 10000; }
+        .modal.open { display:flex; }
+        .modal-card { width: 100%; max-width: 640px; background: var(--bg-secondary); border-radius:12px; box-shadow: var(--shadow-lg); margin: 16px; transition: background-color 0.3s ease, box-shadow 0.3s ease; }
+        .modal-header { padding:10px 12px; border-bottom:1px solid var(--border-color); display:flex; justify-content: space-between; align-items:center; transition: border-color 0.3s ease; }
+        .modal-title { margin:0; color: var(--text-primary); transition: color 0.3s ease; }
+        .modal-body { padding:12px; }
+        .modal-actions { padding:10px 12px; border-top:1px solid var(--border-color); display:flex; gap:8px; align-items:center; justify-content:flex-end; transition: border-color 0.3s ease; }
+        body.modal-open { overflow: hidden; }
+        /* Form control normalization inside modal */
+        .modal-body label { display:block; font-weight:600; color: var(--text-primary); margin-bottom:4px; transition: color 0.3s ease; }
+        .modal-body input[type="text"], .modal-body select, .modal-body textarea {
+            width:100%; padding:8px 9px; border:1px solid var(--border-input); border-radius:8px; box-sizing: border-box; font-size:0.95rem; background: var(--bg-secondary); color: var(--text-primary); transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        .modal-body textarea { min-height: 90px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; }
+        @media (max-width: 860px){
+            .modal-body .grid-2 { grid-template-columns: 1fr; }
+        }
+    </style>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self';">
+</head>
+<body>
+    {% include 'sidebar.html' %}
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, msg in messages %}
+                <div class="flash {{ category }}" style="margin-bottom:12px; padding:10px 12px; border-radius:8px; border:1px solid;">
+                    {{ msg }}
+                </div>
+            {% endfor %}
+        {% endif %}
+        {% endwith %}
+        <div class="toolbar">
+            <div>
+                <h1>Sensors</h1>
+                <div class="subtitle">Registered IoT devices and key metadata</div>
+            </div>
+            <div class="filters">
+                <form method="get" action="{{ url_for('sensors') }}" style="display:flex; gap:10px; align-items:center;">
+                    <input type="text" name="q" value="{{ q or '' }}" placeholder="Search device, type, location...">
+                    <select name="status">
+                        <option value="">All statuses</option>
+                        <option value="active" {% if status_filter=='active' %}selected{% endif %}>active</option>
+                        <option value="inactive" {% if status_filter=='inactive' %}selected{% endif %}>inactive</option>
+                        <option value="revoked" {% if status_filter=='revoked' %}selected{% endif %}>revoked</option>
+                    </select>
+                    <button class="btn" type="submit">Filter</button>
+                </form>
+                <a class="btn" href="{{ url_for('sensors_register') }}">Register New Sensor</a>
+            </div>
+        </div>
+
+        <div style="margin: 6px 0 16px; padding:10px 12px; border-radius:8px; background:#fff7e6; border:1px solid #ffe3b3; color:#8a5a00; font-weight:600;">
+            Note: It is recommended to have at most 3 devices active at a time per user for optimal performance. You can activate or deactivate devices using the Edit button.
+        </div>
+
+        {% if sensors and sensors|length > 0 %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Device ID</th>
+                        <th>Type</th>
+                        <th>Location</th>
+                        <th class="nowrap">Threshold</th>
+                        <th>Status</th>
+                        <th class="nowrap">Registered At</th>
+                        <th class="actions">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for s in sensors %}
+                    <tr>
+                        <td class="mono">{{ s.device_id }}</td>
+                        <td>{{ s.device_type }}</td>
+                        <td>{{ s.location or '-' }}</td>
+                        <td class="nowrap">
+                            {% set minv = s.min_threshold_effective %}
+                            {% set maxv = s.max_threshold_effective %}
+                            {% if minv is none and maxv is none %}
+                                -
+                            {% else %}
+                                {{ minv if minv is not none else '-' }} – {{ maxv if maxv is not none else '-' }}
+                                {% if s.threshold_source == 'custom' %}
+                                    <span class="pill" style="background:#eef6ff; color:#1d4ed8; border:1px solid #bfdbfe;">custom</span>
+                                {% elif s.threshold_source == 'default' %}
+                                    <span class="pill" style="background:#f1f5f9; color:#0f172a; border:1px solid #e2e8f0;">default</span>
+                                {% endif %}
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="pill {{ s.status }}">{{ s.status }}</span>
+                        </td>
+                        <td class="nowrap">{{ s.registered_at or '-' }}</td>
+                        
+                        <td class="actions">
+                            <div style="display:flex; gap:8px; justify-content:flex-end;">
+                                <button class="btn" type="button" onclick="openEditModal(this)" data-device_id="{{ s.device_id }}" data-device_type="{{ s.device_type }}" data-location="{{ s.location or '' }}" data-status="{{ s.status }}" data-fp="{{ s.public_key_fingerprint or '' }}" data-def-min="{{ s.default_min or '' }}" data-def-max="{{ s.default_max or '' }}" data-custom-min="{{ s.min_threshold or '' }}" data-custom-max="{{ s.max_threshold or '' }}">Edit</button>
+                                <form method="post" action="{{ url_for('sensors_delete') }}" onsubmit="return confirmDelete('{{ s.device_id }}')">
+                                    <input type="hidden" name="device_id" value="{{ s.device_id }}">
+                                    <button type="submit" class="btn" style="background:#b02a37;">Delete</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    <!-- edit modal trigger values stored on button via data-* attributes above -->
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+            <div class="empty">No sensors registered yet. Click "Register New Sensor" to add one.</div>
+        {% endif %}
+    </div>
+    <!-- Edit Modal -->
+    <div id="editModal" class="modal" aria-hidden="true" role="dialog" aria-modal="true">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="modal-title">Edit Sensor <span class="mono" data-field="device_id"></span></h3>
+                <button class="btn" type="button" onclick="closeEditModal()" style="background:#6c757d;">Close</button>
+            </div>
+            <form method="post" action="{{ url_for('sensors_update') }}">
+                <div class="modal-body">
+                    <div class="subtitle" style="margin:0 0 12px; color: var(--text-secondary);">Type: <strong data-field="device_type" style="color: var(--text-primary);"></strong></div>
+                    <input type="hidden" name="device_id" value="">
+                        <div class="grid-2" style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; align-items:start;">
+                        <div>
+                            <label>Location</label>
+                            <input type="text" name="location">
+                        </div>
+                        <div>
+                            <label>Status</label>
+                            <select name="status">
+                                <option value="active">active</option>
+                                <option value="inactive">inactive</option>
+                                <option value="revoked">revoked</option>
+                            </select>
+                        </div>
+                        
+                        <div style="grid-column: span 2;">
+                            <label>Current Public Key</label>
+                            <div id="pk-preview" style="padding:8px; border:1px dashed var(--border-input); border-radius:8px; background: var(--bg-tertiary); color: var(--text-primary);">
+                                <span class="mono" data-field="public_key_fingerprint">No key set</span>
+                            </div>
+                        </div>
+                        <div style="grid-column: span 2; background: var(--bg-tertiary); padding:10px; border-radius:8px;">
+                            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; align-items:end;">
+                                <div>
+                                    <label style="margin:0; display:flex; align-items:center; gap:8px; font-weight:600; color: var(--text-primary);">
+                                        <input type="checkbox" id="use_default_cb" checked onchange="toggleDefault(this)">
+                                        <span>Use default threshold</span>
+                                    </label>
+                                </div>
+                                <div style="text-align:right; color: var(--text-secondary); font-size:0.92rem;">
+                                    Default: <span data-field="default_min">-</span> to <span data-field="default_max">-</span>
+                                </div>
+                                <div>
+                                    <label style="display:block; font-weight:600; color: var(--text-primary);">Min</label>
+                                    <input type="text" name="min_threshold" placeholder="e.g., 6.5" style="max-width:200px; width:100%;" disabled>
+                                </div>
+                                <div>
+                                    <label style="display:block; font-weight:600; color: var(--text-primary);">Max</label>
+                                    <input type="text" name="max_threshold" placeholder="e.g., 8.5" style="max-width:200px; width:100%;" disabled>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="grid-column: span 2;">
+                            <label>Public Key (PEM, required if setting active)</label>
+                            <textarea name="public_key" placeholder="-----BEGIN PUBLIC KEY-----
+...
+-----END PUBLIC KEY-----" rows="4" style="min-height: 70px;"></textarea>
+                            <div style="color: var(--text-secondary); margin-top:6px;">Leave blank to keep existing. Required only when activating.</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn" style="background:#6c757d;" onclick="closeEditModal()">Cancel</button>
+                    <button type="submit" class="btn">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    <script>
+        function openEditModal(btn){
+            var modal = document.getElementById('editModal');
+            if (!modal) return;
+            // Populate form
+            modal.querySelector('input[name="device_id"]').value = btn.getAttribute('data-device_id') || '';
+            modal.querySelector('[data-field="device_id"]').textContent = btn.getAttribute('data-device_id') || '';
+            modal.querySelector('[data-field="device_type"]').textContent = btn.getAttribute('data-device_type') || '';
+            modal.querySelector('input[name="location"]').value = btn.getAttribute('data-location') || '';
+            
+            var status = btn.getAttribute('data-status') || '';
+            var sel = modal.querySelector('select[name="status"]');
+            if (sel){ sel.value = status; }
+            // Clear public key textarea by default
+            var pk = modal.querySelector('textarea[name="public_key"]');
+            if (pk){ pk.value = ''; }
+            // Fingerprint preview
+            var fp = btn.getAttribute('data-fp') || '';
+            var fpEl = modal.querySelector('[data-field="public_key_fingerprint"]');
+            if (fpEl){ fpEl.textContent = fp || 'No key set'; }
+
+            // Fill default min/max from data attributes
+            var defMin = btn.getAttribute('data-def-min') || '';
+            var defMax = btn.getAttribute('data-def-max') || '';
+            var defMinEl = modal.querySelector('[data-field="default_min"]');
+            var defMaxEl = modal.querySelector('[data-field="default_max"]');
+            if (defMinEl) defMinEl.textContent = defMin || '-';
+            if (defMaxEl) defMaxEl.textContent = defMax || '-';
+
+            // Initialize default toggle and custom values
+            var cb = modal.querySelector('#use_default_cb');
+            var minInput = modal.querySelector('input[name="min_threshold"]');
+            var maxInput = modal.querySelector('input[name="max_threshold"]');
+            var customMin = btn.getAttribute('data-custom-min') || '';
+            var customMax = btn.getAttribute('data-custom-max') || '';
+            var hadCustom = (customMin && customMin !== '') || (customMax && customMax !== '');
+            if (cb){ cb.checked = !hadCustom; }
+            if (hadCustom){
+                if (minInput) minInput.value = customMin;
+                if (maxInput) maxInput.value = customMax;
+            }
+            toggleDefault(cb);
+
+            // Update PK requirement based on status and whether a key exists
+            setPublicKeyRequirement(modal);
+
+            // Re-evaluate when status changes
+            if (sel){
+                sel.onchange = function(){ setPublicKeyRequirement(modal); };
+            }
+
+            // Validate on submit: require PK if activating and no existing key
+            var form = modal.querySelector('form');
+            if (form){
+                form.onsubmit = function(e){
+                    var requiredNow = setPublicKeyRequirement(modal);
+                    var pkArea = modal.querySelector('textarea[name="public_key"]');
+                    if (requiredNow && pkArea && (!pkArea.value || pkArea.value.trim() === '')){
+                        e.preventDefault();
+                        alert('Public key is required when setting status to active.');
+                        pkArea.focus();
+                        return false;
+                    }
+                };
+            }
+            modal.classList.add('open');
+            document.body.classList.add('modal-open');
+        }
+        function closeEditModal(){
+            var modal = document.getElementById('editModal');
+            if (!modal) return;
+            modal.classList.remove('open');
+            document.body.classList.remove('modal-open');
+        }
+
+        // Helper toggles the required attribute for the PK textarea.
+        // Returns true if PK is required, false otherwise.
+        function setPublicKeyRequirement(modal){
+            var sel = modal.querySelector('select[name="status"]');
+            var pkArea = modal.querySelector('textarea[name="public_key"]');
+            var fpText = (modal.querySelector('[data-field="public_key_fingerprint"]').textContent || '').toLowerCase();
+            var hasExistingKey = fpText && fpText !== 'no key set';
+            var isActive = sel && sel.value === 'active';
+            var requirePk = isActive && !hasExistingKey;
+            if (pkArea){ pkArea.required = requirePk; pkArea.style.borderColor = requirePk ? '#dc3545' : '#cfd9e3'; }
+            return requirePk;
+        }
+        function toggleDefault(cb){
+            var modal = document.getElementById('editModal');
+            if (!modal) return;
+            var minInput = modal.querySelector('input[name="min_threshold"]');
+            var maxInput = modal.querySelector('input[name="max_threshold"]');
+            var useDefault = cb && cb.checked;
+            if (minInput) { minInput.disabled = useDefault; if (useDefault) minInput.value = ''; }
+            if (maxInput) { maxInput.disabled = useDefault; if (useDefault) maxInput.value = ''; }
+        }
+        function confirmDelete(deviceId){
+            return confirm('Are you sure you want to delete sensor ' + deviceId + '? This cannot be undone.');
+        }
+    </script>
+    {% include 'footer.html' ignore missing %}
+</body>
+</html>
+
+
+

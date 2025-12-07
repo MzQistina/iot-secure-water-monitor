@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Water Quality System</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', sans-serif;
+            background: url("{{ url_for('static', filename='landing.svg') }}") no-repeat center center fixed;
+            background-size: cover;
+            height: 100vh;
+        }
+
+        .intro-box {
+            position: absolute;
+            top: 50%;
+            right: 60px;
+            transform: translateY(-50%);
+            width: 480px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 40px 30px;
+            border-radius: 20px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+        }
+
+        .intro-box h1 {
+            color: #2a4d69;
+            font-size: 2rem;
+            margin-bottom: 16px;
+        }
+
+        .intro-box p {
+            color: #355972;
+            font-size: 1.1rem;
+            line-height: 1.6;
+            margin-bottom: 28px;
+        }
+
+        .intro-box .btn {
+            background-color: #2a4d69;
+            color: white;
+            border: none;
+            padding: 14px 26px;
+            border-radius: 8px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .intro-box .btn:hover {
+            background-color: #1e3b52;
+        }
+
+        @media (max-width: 800px) {
+            .intro-box {
+                position: static;
+                margin: 40px auto;
+                width: 90%;
+                transform: none;
+            }
+        }
+        @media (max-width: 420px) {
+            .intro-box { width: 94%; padding: 24px 18px; }
+            .intro-box h1 { font-size: 1.4rem; }
+            .intro-box p { font-size: 1rem; }
+            .intro-box .btn { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="intro-box">
+        <h1>Welcome to the Water Monitoring System</h1>
+        <p>
+            Monitor water quality in real time with secure IoT integration. This system helps ensure safe drinking water by analyzing TDS, pH, and turbidity levels efficiently.
+        </p>
+<a href="{{ url_for('login') }}">
+    <button class="btn">Get Started</button>
+</a>
+    </div>
+</body>
+</html>
+
+

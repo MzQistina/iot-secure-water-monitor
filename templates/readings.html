@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live Readings - Water Monitor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <script>
+        // Apply theme immediately before page renders to prevent white flash
+        (function() {
+            const theme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: var(--bg-primary);
+            margin: 0;
+            padding: 0;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            box-shadow: var(--shadow-lg);
+            padding: 32px 24px;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        h1 {
+            text-align: center;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+            font-size: 1.8rem;
+            transition: color 0.3s ease;
+        }
+        .sub {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            font-size: 0.95rem;
+            transition: color 0.3s ease;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 12px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            transition: background-color 0.3s ease;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn {
+            background: #2a4d69;
+            color: #fff;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #1e3b52; }
+        .btn:active { transform: scale(0.98); }
+        .btn:disabled { background: #9ca3af; cursor: not-allowed; }
+        .btn-secondary {
+            background: #6b7280;
+        }
+        .btn-secondary:hover { background: #4b5563; }
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 0.85rem;
+        }
+        select {
+            padding: 6px 10px;
+            border: 1px solid var(--border-input);
+            border-radius: 6px;
+            font-size: 0.9rem;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        }
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: #e5e7eb;
+            color: #374151;
+        }
+        .status-indicator.connected {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .status-indicator.disconnected {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        .status-indicator.loading {
+            background: #fef3c7;
+            color: #92400e;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .last-update {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            margin-top: 8px;
+            transition: color 0.3s ease;
+        }
+        .reading-list { list-style: none; padding: 0; margin: 0; }
+        .reading-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            margin-bottom: 14px;
+            padding: 16px 18px;
+            box-shadow: var(--shadow);
+            font-size: 1.08rem;
+            transition: transform 0.2s, box-shadow 0.2s, background-color 0.3s ease;
+        }
+        .reading-card.updated {
+            animation: highlight 0.5s ease-out;
+        }
+        @keyframes highlight {
+            0% { background: var(--bg-secondary); transform: scale(1); }
+            50% { transform: scale(1.01); }
+            100% { background: var(--bg-tertiary); transform: scale(1); }
+        }
+        .reading-label { color: var(--text-primary); font-weight: 600; transition: color 0.3s ease; }
+        .reading-value { color: var(--text-primary); font-weight: 500; min-width: 120px; text-align: right; transition: color 0.3s ease; }
+        .safe-status {
+            text-align: center;
+            margin-top: 18px;
+            font-size: 1.05rem;
+            font-weight: 600;
+            padding: 10px 0;
+            border-radius: 8px;
+        }
+        .safe { background: #d4f5e9; color: #217a4d; border: 1px solid #b2e6d2; }
+        .unsafe { background: #ffe3e3; color: #b02a37; border: 1px solid #ffb3b3; }
+        .issues { color: #9b2c2c; font-size: 0.95rem; margin-top: 8px; }
+        .muted { color: var(--text-muted); transition: color 0.3s ease; }
+        .stale-warning {
+            background: #fef3c7;
+            color: #92400e;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+        .loading-overlay {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            padding: 12px;
+            transition: color 0.3s ease;
+        }
+        @media (max-width: 600px) {
+            .container { padding: 18px 10px; margin: 18px; }
+            h1 { font-size: 1.4rem; }
+            .reading-card { font-size: 1rem; padding: 12px 10px; }
+            .controls { flex-direction: column; }
+            .control-group { width: 100%; justify-content: center; }
+        }
+    </style>
+</head>
+<body>
+    {% include 'sidebar.html' %}
+    <div class="container">
+        <h1>Live Water Readings by Tank</h1>
+        <div class="sub">Real-time water quality monitoring</div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <button id="pauseBtn" class="btn btn-small" onclick="togglePause()">⏸ Pause</button>
+                <button id="refreshBtn" class="btn btn-small btn-secondary" onclick="manualRefresh()" title="Refresh now">🔄 Refresh</button>
+            </div>
+            <div class="control-group">
+                <label for="intervalSelect" style="font-size: 0.85rem; color: var(--text-muted);">Update:</label>
+                <select id="intervalSelect" onchange="changeInterval()">
+                    <option value="20000" selected>Every 20s</option>
+                    <option value="40000">Every 40s</option>
+                    <option value="60000">Every 60s</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <div id="connectionStatus" class="status-indicator">
+                    <span class="status-dot"></span>
+                    <span>Connecting...</span>
+                </div>
+            </div>
+        </div>
+        
+        <div id="staleWarning" class="stale-warning" style="display:none;"></div>
+        <div id="loadingIndicator" class="loading-overlay" style="display:none;">Loading data...</div>
+        
+        <ul id="sensor_list" class="reading-list"></ul>
+        <div id="status" class="safe-status muted">Waiting for data…</div>
+        <div id="issues" class="issues" style="display:none"></div>
+        <div id="lastUpdate" class="last-update"></div>
+    </div>
+
+    <script>
+        // State management
+        let isPaused = false;
+        let refreshInterval = 20000;
+        let intervalId1 = null;
+        let intervalId2 = null;
+        let lastUpdateTime = null;
+        let consecutiveErrors = 0;
+        let previousData = null;
+        const MAX_RETRIES = 3;
+        const STALE_THRESHOLD = 30000; // 30 seconds
+
+        // Connection status management
+        function updateConnectionStatus(status) {
+            const statusEl = document.getElementById('connectionStatus');
+            statusEl.className = 'status-indicator ' + status;
+            const text = statusEl.querySelector('span:last-child');
+            if (status === 'connected') {
+                text.textContent = 'Connected';
+            } else if (status === 'disconnected') {
+                text.textContent = 'Disconnected';
+            } else if (status === 'loading') {
+                text.textContent = 'Loading...';
+            }
+        }
+
+        // Update last update timestamp
+        function updateLastUpdateTime() {
+            const now = new Date();
+            lastUpdateTime = now.getTime();
+            const timeStr = now.toLocaleTimeString();
+            document.getElementById('lastUpdate').textContent = `Last updated: ${timeStr}`;
+        }
+
+        // Check for stale data
+        function checkStaleData() {
+            const staleEl = document.getElementById('staleWarning');
+            if (!lastUpdateTime) {
+                staleEl.style.display = 'none';
+                return;
+            }
+            const age = Date.now() - lastUpdateTime;
+            if (age > STALE_THRESHOLD) {
+                const seconds = Math.floor(age / 1000);
+                staleEl.textContent = `⚠️ Data is ${seconds}s old. Check sensor connection.`;
+                staleEl.style.display = 'block';
+            } else {
+                staleEl.style.display = 'none';
+            }
+        }
+
+        // Show/hide loading indicator
+        function setLoading(show) {
+            document.getElementById('loadingIndicator').style.display = show ? 'block' : 'none';
+        }
+
+        // Compare data to detect changes
+        function dataChanged(newData) {
+            if (!previousData) return true;
+            const oldSensors = JSON.stringify(previousData.active_sensors || []);
+            const newSensors = JSON.stringify(newData.active_sensors || []);
+            return oldSensors !== newSensors;
+        }
+
+        // Enhanced fetch with retry logic
+        async function fetchWithRetry(url, retries = MAX_RETRIES) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 5000);
+                    const res = await fetch(url, { 
+                        cache: 'no-store',
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const data = await res.json();
+                    consecutiveErrors = 0;
+                    updateConnectionStatus('connected');
+                    return data;
+                } catch (e) {
+                    if (i === retries - 1) {
+                        consecutiveErrors++;
+                        if (consecutiveErrors >= 2) {
+                            updateConnectionStatus('disconnected');
+                        }
+                        throw e;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)));
+                }
+            }
+        }
+
+        function updateUI(data){
+            if (!data) return;
+            
+            const list = document.getElementById('sensor_list');
+            const sensors = (data && data.active_sensors) || [];
+            const byLoc = {};
+            
+            sensors.forEach(s => {
+                const loc = (s.location || 'Unknown').trim();
+                const metric = (s.device_type || '').toLowerCase();
+                const entry = byLoc[loc] || { metrics: {}, sources: {} };
+                entry.metrics[metric] = s.value;
+                entry.sources[metric] = s.device_id;
+                byLoc[loc] = entry;
+            });
+            
+            const order = Object.keys(byLoc).sort((a,b)=>a.localeCompare(b));
+            // Priority order for common metrics, but we'll display all metrics found
+            const metricPriority = ['tds','ph','turbidity','temperature','dissolved_oxygen','conductivity','ammonia','pressure'];
+            
+            // Clear and rebuild list
+            list.innerHTML = '';
+            
+            if (order.length === 0) {
+                const emptyMsg = document.createElement('li');
+                emptyMsg.style.textAlign = 'center';
+                emptyMsg.style.color = 'var(--text-muted)';
+                emptyMsg.style.padding = '20px';
+                emptyMsg.textContent = 'No active sensors found';
+                list.appendChild(emptyMsg);
+                return;
+            }
+            
+            const hasChanges = dataChanged(data);
+            
+            order.forEach(loc => {
+                const container = document.createElement('li');
+                container.style.listStyle = 'none';
+                
+                const header = document.createElement('div');
+                header.className = 'reading-card';
+                header.style.background = 'var(--bg-secondary)';
+                header.style.display = 'flex';
+                header.style.justifyContent = 'space-between';
+                header.style.alignItems = 'center';
+                
+                const headerLeft = document.createElement('div');
+                headerLeft.style.display = 'flex';
+                headerLeft.style.alignItems = 'center';
+                headerLeft.style.gap = '12px';
+                
+                const hlabel = document.createElement('span');
+                hlabel.className = 'reading-label';
+                hlabel.textContent = loc || 'Unknown';
+                
+                const requestBtn = document.createElement('button');
+                requestBtn.className = 'btn btn-small';
+                requestBtn.style.fontSize = '0.75rem';
+                requestBtn.style.padding = '4px 10px';
+                requestBtn.textContent = '📡 Request';
+                requestBtn.title = `Request reading from sensors at ${loc}`;
+                requestBtn.onclick = () => requestReadingForLocation(loc);
+                requestBtn.id = `request-btn-${loc.replace(/\s+/g, '-')}`;
+                
+                headerLeft.appendChild(hlabel);
+                headerLeft.appendChild(requestBtn);
+                
+                const hval = document.createElement('span');
+                hval.className = 'reading-value';
+                hval.textContent = 'Tank';
+                
+                header.appendChild(headerLeft);
+                header.appendChild(hval);
+                container.appendChild(header);
+                
+                // Get all metrics for this location, sorted by priority then alphabetically
+                const locationMetrics = Object.keys(byLoc[loc].metrics || {});
+                const sortedMetrics = locationMetrics.sort((a, b) => {
+                    const aIdx = metricPriority.indexOf(a.toLowerCase());
+                    const bIdx = metricPriority.indexOf(b.toLowerCase());
+                    if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+                    if (aIdx !== -1) return -1;
+                    if (bIdx !== -1) return 1;
+                    return a.localeCompare(b);
+                });
+                
+                sortedMetrics.forEach(m => {
+                    const value = (byLoc[loc].metrics || {})[m];
+                    if (value === undefined) return;
+                    
+                    const row = document.createElement('div');
+                    row.className = 'reading-card';
+                    if (hasChanges) {
+                        row.classList.add('updated');
+                        setTimeout(() => row.classList.remove('updated'), 500);
+                    }
+                    
+                    const label = document.createElement('span');
+                    label.className = 'reading-label';
+                    const pretty = m === 'tds' ? 'TDS' : (m === 'ph' ? 'pH' : (m.charAt(0).toUpperCase() + m.slice(1).replace('_',' ')));
+                    const src = (byLoc[loc].sources || {})[m];
+                    label.innerHTML = `${pretty}<br><span class="muted" style="font-size:0.9rem">${src ? '(' + src + ')' : ''}</span>`;
+                    
+                    const val = document.createElement('span');
+                    val.className = 'reading-value';
+                    let suffix = '';
+                    const mLower = m.toLowerCase();
+                    if (mLower === 'tds') suffix = ' ppm';
+                    else if (mLower === 'turbidity') suffix = ' NTU';
+                    else if (mLower === 'temperature') suffix = ' °C';
+                    else if (mLower === 'dissolved_oxygen') suffix = ' mg/L';
+                    else if (mLower === 'conductivity') suffix = ' µS/cm';
+                    else if (mLower === 'ammonia') suffix = ' mg/L';
+                    else if (mLower === 'pressure') suffix = ' kPa';
+                    val.textContent = (value === null || value === undefined) ? '-' : `${value}${suffix}`;
+                    
+                    row.appendChild(label);
+                    row.appendChild(val);
+                    container.appendChild(row);
+                });
+                
+                list.appendChild(container);
+            });
+            
+            previousData = JSON.parse(JSON.stringify(data));
+        }
+
+        function updateSafety(data){
+            if (!data) return;
+            const issues = Array.isArray(data.safety_issues) ? data.safety_issues : [];
+            setStatus(data.safe_to_drink, data.safe_to_drink, issues);
+        }
+        
+        function setStatus(textOrSafe, safeFlag, issues){
+            const statusEl = document.getElementById('status');
+            statusEl.classList.remove('safe','unsafe','muted');
+            let text = '';
+            if (typeof textOrSafe === 'boolean') {
+                if (textOrSafe) {
+                    statusEl.classList.add('safe');
+                    text = '✅ Water is SAFE to drink.';
+                } else {
+                    statusEl.classList.add('unsafe');
+                    text = '⚠️ Water is NOT safe to drink.';
+                }
+            } else {
+                statusEl.classList.add('muted');
+                text = textOrSafe || 'Waiting for data…';
+            }
+            statusEl.textContent = text;
+
+            const issuesEl = document.getElementById('issues');
+            if (issues && issues.length) {
+                issuesEl.style.display = 'block';
+                issuesEl.textContent = 'Issues: ' + issues.join('; ');
+            } else {
+                issuesEl.style.display = 'none';
+                issuesEl.textContent = '';
+            }
+        }
+
+        // Fetch functions
+        async function fetchActives(){
+            if (isPaused) return;
+            try {
+                setLoading(true);
+                updateConnectionStatus('loading');
+                const data = await fetchWithRetry("{{ url_for('api_active_sensors') }}");
+                updateUI(data);
+                updateLastUpdateTime();
+                setLoading(false);
+            } catch(e) {
+                setStatus('Unable to fetch active sensors', null, []);
+                setLoading(false);
+                console.error('Fetch error:', e);
+            }
+        }
+        
+        async function fetchSafety(){
+            if (isPaused) return;
+            try {
+                const data = await fetchWithRetry("{{ url_for('api_latest') }}");
+                updateSafety(data);
+            } catch(e) {
+                setStatus('Waiting for data…', null, []);
+                console.error('Safety fetch error:', e);
+            }
+        }
+
+        // Control functions
+        function togglePause() {
+            isPaused = !isPaused;
+            const btn = document.getElementById('pauseBtn');
+            if (isPaused) {
+                btn.textContent = '▶ Resume';
+                btn.classList.add('btn-secondary');
+                if (intervalId1) clearInterval(intervalId1);
+                if (intervalId2) clearInterval(intervalId2);
+                intervalId1 = null;
+                intervalId2 = null;
+            } else {
+                btn.textContent = '⏸ Pause';
+                btn.classList.remove('btn-secondary');
+                startIntervals();
+            }
+        }
+
+        function changeInterval() {
+            const select = document.getElementById('intervalSelect');
+            refreshInterval = parseInt(select.value);
+            if (!isPaused) {
+                if (intervalId1) clearInterval(intervalId1);
+                if (intervalId2) clearInterval(intervalId2);
+                startIntervals();
+            }
+        }
+
+        function startIntervals() {
+            intervalId1 = setInterval(fetchActives, refreshInterval);
+            intervalId2 = setInterval(fetchSafety, refreshInterval);
+        }
+
+        async function manualRefresh() {
+            const btn = document.getElementById('refreshBtn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Refreshing...';
+            await Promise.all([fetchActives(), fetchSafety()]);
+            btn.disabled = false;
+            btn.textContent = '🔄 Refresh';
+        }
+
+        async function requestReadingForLocation(location) {
+            const btnId = `request-btn-${location.replace(/\s+/g, '-')}`;
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '⏳ Requesting...';
+            
+            try {
+                const res = await fetch("{{ url_for('api_reading_request') }}", {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ location: location })
+                });
+                
+                const data = await res.json();
+                
+                if (res.ok) {
+                    btn.textContent = '✅ Sent';
+                    btn.style.background = '#10b981';
+                    // Refresh data after a short delay to show new readings
+                    setTimeout(() => {
+                        manualRefresh();
+                    }, 2000);
+                    // Reset button after 3 seconds
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.style.background = '';
+                        btn.disabled = false;
+                    }, 3000);
+                } else {
+                    btn.textContent = '❌ Failed';
+                    btn.style.background = '#ef4444';
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.style.background = '';
+                        btn.disabled = false;
+                    }, 2000);
+                    console.error('Request failed:', data.error);
+                }
+            } catch (e) {
+                btn.textContent = '❌ Error';
+                btn.style.background = '#ef4444';
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.background = '';
+                    btn.disabled = false;
+                }, 2000);
+                console.error('Request error:', e);
+            }
+        }
+
+        // Initialize
+        fetchActives();
+        fetchSafety();
+        startIntervals();
+        
+        // Check for stale data periodically
+        setInterval(checkStaleData, 5000);
+        
+        // Update connection status on page visibility
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden && !isPaused) {
+                manualRefresh();
+            }
+        });
+    </script>
+    {% include 'footer.html' ignore missing %}
+</body>
+</html>

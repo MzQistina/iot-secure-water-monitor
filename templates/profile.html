@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Profile - Water Monitoring</title>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <script>
+        // Apply theme immediately before page renders to prevent white flash
+        (function() {
+            const theme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Arial, sans-serif; 
+            background: var(--bg-primary) url("{{ url_for('static', filename='profilebg.svg') }}") no-repeat center center fixed; 
+            background-size: cover;
+            margin: 0; 
+            color: var(--text-primary); 
+            transition: background-color 0.3s ease, color 0.3s ease, background-image 0.3s ease;
+            min-height: 100vh;
+        }
+        html[data-theme="dark"] body {
+            background: var(--bg-primary) url("{{ url_for('static', filename='darkprofilebg.svg') }}") no-repeat center center fixed;
+            background-size: cover;
+        }
+        .container { 
+            max-width: 600px; 
+            margin: 40px auto; 
+            background: var(--bg-secondary); 
+            border-radius: 12px; 
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 4px 16px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.08); 
+            padding: 28px 24px; 
+            transition: background-color 0.3s ease, box-shadow 0.3s ease; 
+        }
+        h1 { text-align: center; color: var(--text-primary); margin-bottom: 10px; transition: color 0.3s ease; }
+        .subtitle { text-align:center; color: var(--text-secondary); margin-bottom: 24px; transition: color 0.3s ease; }
+        .field { margin-bottom: 16px; }
+        label { display: block; color: var(--text-primary); margin-bottom: 8px; font-weight: 600; transition: color 0.3s ease; }
+        input[type="text"], input[type="password"], input[type="email"] { width: 100%; padding: 12px 10px; border: 1px solid var(--border-input); border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: var(--bg-secondary); color: var(--text-primary); transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
+        .row { display:flex; gap:12px; }
+        .row .col { flex:1; }
+        .btn { background: #2a4d69; color: #fff; border: none; padding: 12px 18px; border-radius: 8px; font-size: 1rem; cursor: pointer; }
+        .btn:hover { background: #1e3b52; }
+        .error { background: #ffe3e3; color: #b02a37; border: 1px solid #ffb3b3; padding: 10px 12px; border-radius: 8px; margin-bottom: 16px; }
+        .success { background: #e9f7ef; color: #1e6b3a; border: 1px solid #b7e1c1; padding: 10px 12px; border-radius: 8px; margin-bottom: 16px; }
+        .topnav { display:flex; justify-content: space-between; align-items:center; margin-bottom: 10px; }
+        .link { color: var(--text-primary); text-decoration:none; font-weight:600; transition: color 0.3s ease; }
+        .section-title { margin-top: 20px; color: var(--text-primary); font-size:1.05rem; transition: color 0.3s ease; }
+        @media (max-width: 800px){
+            .row { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    {% include 'sidebar.html' %}
+    <div class="container">
+        <h1>Your Profile</h1>
+        <div class="subtitle">View and update your account details</div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, msg in messages %}
+                <div class="success">{{ msg }}</div>
+            {% endfor %}
+        {% endif %}
+        {% endwith %}
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('profile') }}" autocomplete="off">
+            <div class="field">
+                <label for="email">Email</label>
+                <input id="email" name="email" type="email" maxlength="255" value="{{ user.email }}" required pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}" title="Please enter a valid email address">
+            </div>
+            <div class="field">
+                <label for="name">Full name</label>
+                <input id="name" name="name" type="text" minlength="2" maxlength="255" value="{{ user.name }}" required pattern="[a-zA-Z\s'-.]{2,}" title="Name can only contain letters, spaces, hyphens, apostrophes, and periods">
+            </div>
+            <div class="field">
+                <label for="username">Username</label>
+                <input id="username" name="username" type="text" minlength="3" maxlength="150" value="{{ user.username }}" required pattern="[a-zA-Z0-9_-]{3,150}" title="Username can only contain letters, numbers, underscores, and hyphens (3-150 characters)">
+            </div>
+
+            <div class="section-title">Change password (optional)</div>
+            <div class="row">
+                <div class="col field">
+                    <label for="current_password">Current password</label>
+                    <input id="current_password" name="current_password" type="password">
+                </div>
+                <div class="col field">
+                    <label for="new_password">New password</label>
+                    <input id="new_password" name="new_password" type="password" minlength="8" maxlength="128" pattern="^(?=.*[a-zA-Z])(?=.*[0-9]).{8,}$" title="Password must be at least 8 characters and contain at least one letter and one number">
+                </div>
+                <div class="col field">
+                    <label for="confirm_password">Confirm new password</label>
+                    <input id="confirm_password" name="confirm_password" type="password" minlength="8" maxlength="128">
+                </div>
+            </div>
+
+            <div style="display:flex; gap:10px; align-items:center;">
+                <button type="submit" class="btn">Save changes</button>
+                <a class="link" href="{{ url_for('dashboard') }}">Cancel</a>
+            </div>
+        </form>
+    </div>
+    {% include 'footer.html' ignore missing %}
+</body>
+</html>
+
+

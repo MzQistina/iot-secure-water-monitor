@@ -1,0 +1,8 @@
+{
+  "ph": { "min": 6.5, "max": 8.5 },
+  "turbidity": { "min": 0, "max": 5 },
+  "tds": { "min": 0, "max": 500 },
+  "temperature": { "min": null, "max": 35 },
+  "dissolved_oxygen": { "min": 5, "max": null },
+  "conductivity": { "min": 0, "max": 500 }
+}
