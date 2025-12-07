@@ -267,104 +267,104 @@ def _ensure_schema(conn) -> None:
     # MySQL-specific migration code - skip for PostgreSQL
     if DB_TYPE != 'postgresql':
         try:
-        # Check if unique_user_device constraint already exists
-        cur.execute("SHOW INDEX FROM sensors WHERE Key_name = 'unique_user_device'")
-        constraint_exists = cur.fetchone() is not None
-        cur.fetchall()  # Consume any remaining results
-        
-        # Check for old unique constraint on device_id alone
-        cur.execute("SHOW INDEX FROM sensors WHERE Column_name = 'device_id' AND Non_unique = 0 AND Key_name != 'PRIMARY' AND Key_name != 'unique_user_device'")
-        old_unique_indexes = cur.fetchall()
-        cur.fetchall()  # Consume any remaining results
-        
-        if old_unique_indexes:
-            # Check for foreign keys that depend on device_id
-            cur.execute("""
-                SELECT CONSTRAINT_NAME, TABLE_NAME 
-                FROM information_schema.KEY_COLUMN_USAGE 
-                WHERE REFERENCED_TABLE_NAME = 'sensors' 
-                AND REFERENCED_COLUMN_NAME = 'device_id'
-                AND TABLE_SCHEMA = DATABASE()
-            """)
-            fk_refs = cur.fetchall()
+            # Check if unique_user_device constraint already exists
+            cur.execute(f"SHOW INDEX FROM {quote_char}sensors{quote_char} WHERE Key_name = 'unique_user_device'")
+            constraint_exists = cur.fetchone() is not None
             cur.fetchall()  # Consume any remaining results
             
-            # Drop foreign keys first if they exist
-            for fk in fk_refs:
-                fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
-                table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
-                if fk_name and table_name:
-                    # Validate table_name and fk_name contain only safe characters
-                    if re.match(r'^[a-zA-Z0-9_]+$', table_name) and re.match(r'^[a-zA-Z0-9_]+$', fk_name):
-                        try:
-                            cur.execute(f"ALTER TABLE `{table_name}` DROP FOREIGN KEY `{fk_name}`")
-                            conn.commit()
-                            print(f"Dropped foreign key {fk_name} from {table_name} to allow constraint migration")
-                        except Exception:
-                            pass
-                    else:
-                        print(f"WARNING: Skipping foreign key drop - unsafe characters in name: {fk_name} or table: {table_name}")
+            # Check for old unique constraint on device_id alone
+            cur.execute(f"SHOW INDEX FROM {quote_char}sensors{quote_char} WHERE Column_name = 'device_id' AND Non_unique = 0 AND Key_name != 'PRIMARY' AND Key_name != 'unique_user_device'")
+            old_unique_indexes = cur.fetchall()
+            cur.fetchall()  # Consume any remaining results
             
-            # Drop old unique constraints on device_id
-            for idx in old_unique_indexes:
-                idx_name = idx[2] if len(idx) > 2 else None
-                if idx_name:
-                    # Validate index name contains only safe characters
-                    if re.match(r'^[a-zA-Z0-9_]+$', idx_name):
-                        try:
-                            cur.execute(f"ALTER TABLE sensors DROP INDEX `{idx_name}`")
-                            conn.commit()
-                            print(f"Dropped old unique constraint: {idx_name}")
-                        except Exception:
-                            pass
-                    else:
-                        print(f"WARNING: Skipping index drop - unsafe characters in name: {idx_name}")
+            if old_unique_indexes:
+                # Check for foreign keys that depend on device_id
+                cur.execute(f"""
+                    SELECT CONSTRAINT_NAME, TABLE_NAME 
+                    FROM information_schema.KEY_COLUMN_USAGE 
+                    WHERE REFERENCED_TABLE_NAME = '{quote_char}sensors{quote_char}' 
+                    AND REFERENCED_COLUMN_NAME = 'device_id'
+                    AND TABLE_SCHEMA = DATABASE()
+                """)
+                fk_refs = cur.fetchall()
+                cur.fetchall()  # Consume any remaining results
+                
+                # Drop foreign keys first if they exist
+                for fk in fk_refs:
+                    fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
+                    table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
+                    if fk_name and table_name:
+                        # Validate table_name and fk_name contain only safe characters
+                        if re.match(r'^[a-zA-Z0-9_]+$', table_name) and re.match(r'^[a-zA-Z0-9_]+$', fk_name):
+                            try:
+                                cur.execute(f"ALTER TABLE {quote_char}{table_name}{quote_char} DROP FOREIGN KEY {quote_char}{fk_name}{quote_char}")
+                                conn.commit()
+                                print(f"Dropped foreign key {fk_name} from {table_name} to allow constraint migration")
+                            except Exception:
+                                pass
+                        else:
+                            print(f"WARNING: Skipping foreign key drop - unsafe characters in name: {fk_name} or table: {table_name}")
+                
+                # Drop old unique constraints on device_id
+                for idx in old_unique_indexes:
+                    idx_name = idx[2] if len(idx) > 2 else None
+                    if idx_name:
+                        # Validate index name contains only safe characters
+                        if re.match(r'^[a-zA-Z0-9_]+$', idx_name):
+                            try:
+                                cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} DROP INDEX {quote_char}{idx_name}{quote_char}")
+                                conn.commit()
+                                print(f"Dropped old unique constraint: {idx_name}")
+                            except Exception:
+                                pass
+                        else:
+                            print(f"WARNING: Skipping index drop - unsafe characters in name: {idx_name}")
+                
+                # Recreate device_id as non-unique index (needed for foreign keys)
+                try:
+                    cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD INDEX idx_sensors_device_id (device_id)")
+                    conn.commit()
+                except Exception:
+                    pass  # Index might already exist
+                
+                # Recreate foreign keys
+                for fk in fk_refs:
+                    fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
+                    table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
+                    if fk_name and table_name:
+                        # Validate table_name and fk_name contain only safe characters
+                        if re.match(r'^[a-zA-Z0-9_]+$', table_name) and re.match(r'^[a-zA-Z0-9_]+$', fk_name):
+                            try:
+                                cur.execute(f"""
+                                    ALTER TABLE {quote_char}{table_name}{quote_char} 
+                                    ADD CONSTRAINT {quote_char}{fk_name}{quote_char} 
+                                    FOREIGN KEY (device_id) 
+                                    REFERENCES {quote_char}sensors{quote_char}(device_id) 
+                                    ON UPDATE CASCADE ON DELETE CASCADE
+                                """)
+                                conn.commit()
+                                print(f"Recreated foreign key {fk_name} on {table_name}")
+                            except Exception:
+                                pass
+                        else:
+                            print(f"WARNING: Skipping foreign key recreation - unsafe characters in name: {fk_name} or table: {table_name}")
             
-            # Recreate device_id as non-unique index (needed for foreign keys)
-            try:
-                cur.execute("ALTER TABLE sensors ADD INDEX idx_sensors_device_id (device_id)")
-                conn.commit()
-            except Exception:
-                pass  # Index might already exist
-            
-            # Recreate foreign keys
-            for fk in fk_refs:
-                fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
-                table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
-                if fk_name and table_name:
-                    # Validate table_name and fk_name contain only safe characters
-                    if re.match(r'^[a-zA-Z0-9_]+$', table_name) and re.match(r'^[a-zA-Z0-9_]+$', fk_name):
-                        try:
-                            cur.execute(f"""
-                                ALTER TABLE `{table_name}` 
-                                ADD CONSTRAINT `{fk_name}` 
-                                FOREIGN KEY (device_id) 
-                                REFERENCES sensors(device_id) 
-                                ON UPDATE CASCADE ON DELETE CASCADE
-                            """)
-                            conn.commit()
-                            print(f"Recreated foreign key {fk_name} on {table_name}")
-                        except Exception:
-                            pass
-                    else:
-                        print(f"WARNING: Skipping foreign key recreation - unsafe characters in name: {fk_name} or table: {table_name}")
-        
-        if not constraint_exists:
-            # Add composite unique constraint on (user_id, device_id)
-            # This ensures: same user_id + same device_id = NOT allowed
-            # But: different user_id + same device_id = ALLOWED
-            try:
-                cur.execute("ALTER TABLE sensors ADD UNIQUE KEY unique_user_device (user_id, device_id)")
-                conn.commit()
-                print("Added composite unique constraint: unique_user_device (user_id, device_id)")
-            except Exception as e:
-                # Constraint might already exist
-                print(f"Note: Could not add composite unique constraint: {e}")
-                pass
-    except Exception as e:
-        # Migration might fail if table structure is different, that's okay
-        print(f"Note: Schema migration: {e}")
-        pass
+            if not constraint_exists:
+                # Add composite unique constraint on (user_id, device_id)
+                # This ensures: same user_id + same device_id = NOT allowed
+                # But: different user_id + same device_id = ALLOWED
+                try:
+                    cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD UNIQUE KEY unique_user_device (user_id, device_id)")
+                    conn.commit()
+                    print("Added composite unique constraint: unique_user_device (user_id, device_id)")
+                except Exception as e:
+                    # Constraint might already exist
+                    print(f"Note: Could not add composite unique constraint: {e}")
+                    pass
+        except Exception as e:
+            # Migration might fail if table structure is different, that's okay
+            print(f"Note: Schema migration: {e}")
+            pass
     # Per-sensor data time series table (if not already created)
     try:
         if DB_TYPE == 'postgresql':
