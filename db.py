@@ -67,11 +67,11 @@ if DATABASE_URL and DB_TYPE == 'postgresql':
     DB_NAME = parsed.path.lstrip('/') or 'ilmuwanutara_e2eewater'
 else:
     # Environment-driven database configuration
-DB_HOST = os.getenv('DB_HOST', 'localhost')
+    DB_HOST = os.getenv('DB_HOST', 'localhost')
     DB_PORT = int(os.getenv('DB_PORT', '5432' if DB_TYPE == 'postgresql' else '3306'))
     DB_USER = os.getenv('DB_USER', 'postgres' if DB_TYPE == 'postgresql' else 'root')
-DB_PASSWORD = os.getenv('DB_PASSWORD', '')
-DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+    DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
 
 _pool = None
 
