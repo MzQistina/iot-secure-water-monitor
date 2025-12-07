@@ -38,7 +38,6 @@ db_encryption.key
 
 # TLS/SSL certificates and private keys (NEVER commit these!)
 *.pem
-!requirements.txt
 cert.pem
 key.pem
 server.crt
@@ -47,4 +46,6 @@ client.crt
 client.key
 ca.crt
 ca.key
+*.crt
+*.cer
 
