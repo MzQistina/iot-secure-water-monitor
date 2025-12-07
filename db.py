@@ -34,8 +34,18 @@ if DB_TYPE == 'postgresql':
         from psycopg2 import pool, Error, errorcode
         from psycopg2.extras import RealDictCursor
         POSTGRESQL_AVAILABLE = True
-    except ImportError:
+        print(f"DEBUG: psycopg2 imported successfully, version: {psycopg2.__version__ if hasattr(psycopg2, '__version__') else 'unknown'}")
+    except ImportError as e:
+        print(f"ERROR: psycopg2 import failed: {e}")
         print("WARNING: psycopg2 not installed. Install with: pip install psycopg2-binary")
+        import traceback
+        traceback.print_exc()
+        POSTGRESQL_AVAILABLE = False
+        DB_TYPE = 'mysql'  # Fallback to MySQL
+    except Exception as e:
+        print(f"ERROR: Unexpected error importing psycopg2: {e}")
+        import traceback
+        traceback.print_exc()
         POSTGRESQL_AVAILABLE = False
         DB_TYPE = 'mysql'  # Fallback to MySQL
 else:
@@ -57,11 +67,11 @@ if DATABASE_URL and DB_TYPE == 'postgresql':
     DB_NAME = parsed.path.lstrip('/') or 'ilmuwanutara_e2eewater'
 else:
     # Environment-driven database configuration
-    DB_HOST = os.getenv('DB_HOST', 'localhost')
+DB_HOST = os.getenv('DB_HOST', 'localhost')
     DB_PORT = int(os.getenv('DB_PORT', '5432' if DB_TYPE == 'postgresql' else '3306'))
     DB_USER = os.getenv('DB_USER', 'postgres' if DB_TYPE == 'postgresql' else 'root')
-    DB_PASSWORD = os.getenv('DB_PASSWORD', '')
-    DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
 
 _pool = None
 
@@ -216,7 +226,7 @@ def _ensure_schema(conn) -> None:
     # Sensors table for device registration and key management
     if DB_TYPE == 'postgresql':
         # PostgreSQL: Use VARCHAR with CHECK instead of ENUM
-        cur.execute(
+    cur.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {quote_char}sensors{quote_char} (
                 id {auto_inc} PRIMARY KEY,
@@ -249,145 +259,145 @@ def _ensure_schema(conn) -> None:
             f"""
             CREATE TABLE IF NOT EXISTS {quote_char}sensors{quote_char} (
                 id {auto_inc} PRIMARY KEY,
-                device_id VARCHAR(100) NOT NULL,
-                device_type VARCHAR(100) NOT NULL,
-                sensor_type_id INT NULL,
-                location VARCHAR(255) DEFAULT NULL,
-                public_key TEXT NULL,
-                status ENUM('active', 'inactive', 'revoked') DEFAULT 'active',
+            device_id VARCHAR(100) NOT NULL,
+            device_type VARCHAR(100) NOT NULL,
+            sensor_type_id INT NULL,
+            location VARCHAR(255) DEFAULT NULL,
+            public_key TEXT NULL,
+            status ENUM('active', 'inactive', 'revoked') DEFAULT 'active',
                 registered_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
                 last_seen {datetime_type} DEFAULT NULL,
                 min_threshold {double_type} NULL,
                 max_threshold {double_type} NULL,
-                user_id INT NULL,
-                INDEX idx_sensors_user_id (user_id),
-                INDEX idx_sensors_device_id (device_id),
-                UNIQUE KEY unique_user_device (user_id, device_id),
-                CONSTRAINT fk_sensors_user FOREIGN KEY (user_id)
+            user_id INT NULL,
+            INDEX idx_sensors_user_id (user_id),
+            INDEX idx_sensors_device_id (device_id),
+            UNIQUE KEY unique_user_device (user_id, device_id),
+            CONSTRAINT fk_sensors_user FOREIGN KEY (user_id)
                     REFERENCES {quote_char}user_cred{quote_char}(sr_no) ON UPDATE CASCADE ON DELETE CASCADE
-            )
-            """
         )
+        """
+    )
     # Add user_id column if it doesn't exist (for existing databases) - MySQL only
     if DB_TYPE != 'postgresql':
-        try:
+    try:
             cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN user_id INT NULL")
             cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD INDEX idx_sensors_user_id (user_id)")
             cur.execute(f"""
                 ALTER TABLE {quote_char}sensors{quote_char} 
-                ADD CONSTRAINT fk_sensors_user 
+            ADD CONSTRAINT fk_sensors_user 
                 FOREIGN KEY (user_id) REFERENCES {quote_char}user_cred{quote_char}(sr_no) ON UPDATE CASCADE ON DELETE CASCADE
-            """)
-        except Exception:
-            # Column or constraint already exists, ignore
-            pass
+        """)
+    except Exception:
+        # Column or constraint already exists, ignore
+        pass
     # Remove old UNIQUE constraint on device_id and add composite unique constraint
     # This allows multiple users to have the same device_id, but prevents same user from having duplicate device_id
     # MySQL-specific migration code - skip for PostgreSQL
     if DB_TYPE != 'postgresql':
-        try:
-            # Check if unique_user_device constraint already exists
+    try:
+        # Check if unique_user_device constraint already exists
             cur.execute(f"SHOW INDEX FROM {quote_char}sensors{quote_char} WHERE Key_name = 'unique_user_device'")
-            constraint_exists = cur.fetchone() is not None
-            cur.fetchall()  # Consume any remaining results
-            
-            # Check for old unique constraint on device_id alone
+        constraint_exists = cur.fetchone() is not None
+        cur.fetchall()  # Consume any remaining results
+        
+        # Check for old unique constraint on device_id alone
             cur.execute(f"SHOW INDEX FROM {quote_char}sensors{quote_char} WHERE Column_name = 'device_id' AND Non_unique = 0 AND Key_name != 'PRIMARY' AND Key_name != 'unique_user_device'")
-            old_unique_indexes = cur.fetchall()
+        old_unique_indexes = cur.fetchall()
+        cur.fetchall()  # Consume any remaining results
+        
+        if old_unique_indexes:
+            # Check for foreign keys that depend on device_id
+                cur.execute(f"""
+                SELECT CONSTRAINT_NAME, TABLE_NAME 
+                FROM information_schema.KEY_COLUMN_USAGE 
+                    WHERE REFERENCED_TABLE_NAME = '{quote_char}sensors{quote_char}' 
+                AND REFERENCED_COLUMN_NAME = 'device_id'
+                AND TABLE_SCHEMA = DATABASE()
+            """)
+            fk_refs = cur.fetchall()
             cur.fetchall()  # Consume any remaining results
             
-            if old_unique_indexes:
-                # Check for foreign keys that depend on device_id
-                cur.execute(f"""
-                    SELECT CONSTRAINT_NAME, TABLE_NAME 
-                    FROM information_schema.KEY_COLUMN_USAGE 
-                    WHERE REFERENCED_TABLE_NAME = '{quote_char}sensors{quote_char}' 
-                    AND REFERENCED_COLUMN_NAME = 'device_id'
-                    AND TABLE_SCHEMA = DATABASE()
-                """)
-                fk_refs = cur.fetchall()
-                cur.fetchall()  # Consume any remaining results
-                
-                # Drop foreign keys first if they exist
-                for fk in fk_refs:
-                    fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
-                    table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
-                    if fk_name and table_name:
-                        # Validate table_name and fk_name contain only safe characters
-                        if re.match(r'^[a-zA-Z0-9_]+$', table_name) and re.match(r'^[a-zA-Z0-9_]+$', fk_name):
-                            try:
+            # Drop foreign keys first if they exist
+            for fk in fk_refs:
+                fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
+                table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
+                if fk_name and table_name:
+                    # Validate table_name and fk_name contain only safe characters
+                    if re.match(r'^[a-zA-Z0-9_]+$', table_name) and re.match(r'^[a-zA-Z0-9_]+$', fk_name):
+                        try:
                                 cur.execute(f"ALTER TABLE {quote_char}{table_name}{quote_char} DROP FOREIGN KEY {quote_char}{fk_name}{quote_char}")
-                                conn.commit()
-                                print(f"Dropped foreign key {fk_name} from {table_name} to allow constraint migration")
-                            except Exception:
-                                pass
-                        else:
-                            print(f"WARNING: Skipping foreign key drop - unsafe characters in name: {fk_name} or table: {table_name}")
-                
-                # Drop old unique constraints on device_id
-                for idx in old_unique_indexes:
-                    idx_name = idx[2] if len(idx) > 2 else None
-                    if idx_name:
-                        # Validate index name contains only safe characters
-                        if re.match(r'^[a-zA-Z0-9_]+$', idx_name):
-                            try:
+                            conn.commit()
+                            print(f"Dropped foreign key {fk_name} from {table_name} to allow constraint migration")
+                        except Exception:
+                            pass
+                    else:
+                        print(f"WARNING: Skipping foreign key drop - unsafe characters in name: {fk_name} or table: {table_name}")
+            
+            # Drop old unique constraints on device_id
+            for idx in old_unique_indexes:
+                idx_name = idx[2] if len(idx) > 2 else None
+                if idx_name:
+                    # Validate index name contains only safe characters
+                    if re.match(r'^[a-zA-Z0-9_]+$', idx_name):
+                        try:
                                 cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} DROP INDEX {quote_char}{idx_name}{quote_char}")
-                                conn.commit()
-                                print(f"Dropped old unique constraint: {idx_name}")
-                            except Exception:
-                                pass
-                        else:
-                            print(f"WARNING: Skipping index drop - unsafe characters in name: {idx_name}")
-                
-                # Recreate device_id as non-unique index (needed for foreign keys)
-                try:
+                            conn.commit()
+                            print(f"Dropped old unique constraint: {idx_name}")
+                        except Exception:
+                            pass
+                    else:
+                        print(f"WARNING: Skipping index drop - unsafe characters in name: {idx_name}")
+            
+            # Recreate device_id as non-unique index (needed for foreign keys)
+            try:
                     cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD INDEX idx_sensors_device_id (device_id)")
-                    conn.commit()
-                except Exception:
-                    pass  # Index might already exist
-                
-                # Recreate foreign keys
-                for fk in fk_refs:
-                    fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
-                    table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
-                    if fk_name and table_name:
-                        # Validate table_name and fk_name contain only safe characters
-                        if re.match(r'^[a-zA-Z0-9_]+$', table_name) and re.match(r'^[a-zA-Z0-9_]+$', fk_name):
-                            try:
-                                cur.execute(f"""
+                conn.commit()
+            except Exception:
+                pass  # Index might already exist
+            
+            # Recreate foreign keys
+            for fk in fk_refs:
+                fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
+                table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
+                if fk_name and table_name:
+                    # Validate table_name and fk_name contain only safe characters
+                    if re.match(r'^[a-zA-Z0-9_]+$', table_name) and re.match(r'^[a-zA-Z0-9_]+$', fk_name):
+                        try:
+                            cur.execute(f"""
                                     ALTER TABLE {quote_char}{table_name}{quote_char} 
                                     ADD CONSTRAINT {quote_char}{fk_name}{quote_char} 
-                                    FOREIGN KEY (device_id) 
+                                FOREIGN KEY (device_id) 
                                     REFERENCES {quote_char}sensors{quote_char}(device_id) 
-                                    ON UPDATE CASCADE ON DELETE CASCADE
-                                """)
-                                conn.commit()
-                                print(f"Recreated foreign key {fk_name} on {table_name}")
-                            except Exception:
-                                pass
-                        else:
-                            print(f"WARNING: Skipping foreign key recreation - unsafe characters in name: {fk_name} or table: {table_name}")
-            
-            if not constraint_exists:
-                # Add composite unique constraint on (user_id, device_id)
-                # This ensures: same user_id + same device_id = NOT allowed
-                # But: different user_id + same device_id = ALLOWED
-                try:
+                                ON UPDATE CASCADE ON DELETE CASCADE
+                            """)
+                            conn.commit()
+                            print(f"Recreated foreign key {fk_name} on {table_name}")
+                        except Exception:
+                            pass
+                    else:
+                        print(f"WARNING: Skipping foreign key recreation - unsafe characters in name: {fk_name} or table: {table_name}")
+        
+        if not constraint_exists:
+            # Add composite unique constraint on (user_id, device_id)
+            # This ensures: same user_id + same device_id = NOT allowed
+            # But: different user_id + same device_id = ALLOWED
+            try:
                     cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD UNIQUE KEY unique_user_device (user_id, device_id)")
-                    conn.commit()
-                    print("Added composite unique constraint: unique_user_device (user_id, device_id)")
-                except Exception as e:
-                    # Constraint might already exist
-                    print(f"Note: Could not add composite unique constraint: {e}")
-                    pass
-        except Exception as e:
-            # Migration might fail if table structure is different, that's okay
-            print(f"Note: Schema migration: {e}")
-            pass
+                conn.commit()
+                print("Added composite unique constraint: unique_user_device (user_id, device_id)")
+            except Exception as e:
+                # Constraint might already exist
+                print(f"Note: Could not add composite unique constraint: {e}")
+                pass
+    except Exception as e:
+        # Migration might fail if table structure is different, that's okay
+        print(f"Note: Schema migration: {e}")
+        pass
     # Per-sensor data time series table (if not already created)
     try:
         if DB_TYPE == 'postgresql':
-            cur.execute(
+        cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {quote_char}sensor_data{quote_char} (
                     id {auto_inc} PRIMARY KEY,
@@ -414,162 +424,162 @@ def _ensure_schema(conn) -> None:
                 f"""
                 CREATE TABLE IF NOT EXISTS {quote_char}sensor_data{quote_char} (
                     id {auto_inc} PRIMARY KEY,
-                    sensor_id INT NOT NULL,
-                    user_id INT NULL,
-                    device_id VARCHAR(100) NULL,
+                sensor_id INT NOT NULL,
+                user_id INT NULL,
+                device_id VARCHAR(100) NULL,
                     recorded_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
-                    value TEXT NOT NULL,
-                    status ENUM('normal','warning','critical') DEFAULT 'normal',
-                    INDEX idx_sensor_data_sensor_id (sensor_id),
-                    INDEX idx_sensor_data_user_id (user_id),
-                    INDEX idx_sensor_data_device_id (device_id),
-                    CONSTRAINT fk_sensor_data_sensor FOREIGN KEY (sensor_id)
+                value TEXT NOT NULL,
+                status ENUM('normal','warning','critical') DEFAULT 'normal',
+                INDEX idx_sensor_data_sensor_id (sensor_id),
+                INDEX idx_sensor_data_user_id (user_id),
+                INDEX idx_sensor_data_device_id (device_id),
+                CONSTRAINT fk_sensor_data_sensor FOREIGN KEY (sensor_id)
                         REFERENCES {quote_char}sensors{quote_char}(id) ON UPDATE CASCADE ON DELETE CASCADE
-                )
-                """
             )
+            """
+        )
         # MySQL-specific migration code - skip for PostgreSQL (tables are created fresh)
         if DB_TYPE != 'postgresql':
-            # Migrate existing DOUBLE column to TEXT for encryption support
-            try:
+        # Migrate existing DOUBLE column to TEXT for encryption support
+        try:
                 cur.execute(f"SHOW COLUMNS FROM {quote_char}sensor_data{quote_char} WHERE Field = 'value' AND Type LIKE 'DOUBLE%'")
-                if cur.fetchone():
+            if cur.fetchone():
                     cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} MODIFY COLUMN value TEXT NOT NULL")
-                    conn.commit()
-                    print("Migrated sensor_data.value column to TEXT for encryption support")
-                cur.fetchall()  # Consume any remaining results
-            except Exception as e:
-                print(f"Note: sensor_data schema migration: {e}")
-                try:
-                    cur.fetchall()
-                except:
-                    pass
-            
-            # Add user_id and device_id columns if they don't exist (migration for existing tables)
+                conn.commit()
+                print("Migrated sensor_data.value column to TEXT for encryption support")
+            cur.fetchall()  # Consume any remaining results
+        except Exception as e:
+            print(f"Note: sensor_data schema migration: {e}")
             try:
+                cur.fetchall()
+            except:
+                pass
+        
+        # Add user_id and device_id columns if they don't exist (migration for existing tables)
+        try:
                 cur.execute(f"SHOW COLUMNS FROM {quote_char}sensor_data{quote_char} WHERE Field = 'user_id'")
-                if not cur.fetchone():
+            if not cur.fetchone():
                     cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} ADD COLUMN user_id INT NULL AFTER sensor_id")
                     cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} ADD INDEX idx_sensor_data_user_id (user_id)")
-                    conn.commit()
-                    print("Added user_id column to sensor_data table")
-                cur.fetchall()  # Consume any remaining results
-            except Exception as e:
-                print(f"Note: sensor_data user_id migration: {e}")
-                try:
-                    cur.fetchall()
-                except:
-                    pass
-            
+                conn.commit()
+                print("Added user_id column to sensor_data table")
+            cur.fetchall()  # Consume any remaining results
+        except Exception as e:
+            print(f"Note: sensor_data user_id migration: {e}")
             try:
+                cur.fetchall()
+            except:
+                pass
+        
+        try:
                 cur.execute(f"SHOW COLUMNS FROM {quote_char}sensor_data{quote_char} WHERE Field = 'device_id'")
-                if not cur.fetchone():
+            if not cur.fetchone():
                     cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} ADD COLUMN device_id VARCHAR(100) NULL AFTER user_id")
                     cur.execute(f"ALTER TABLE {quote_char}sensor_data{quote_char} ADD INDEX idx_sensor_data_device_id (device_id)")
-                    conn.commit()
-                    print("Added device_id column to sensor_data table")
-                cur.fetchall()  # Consume any remaining results
-            except Exception as e:
-                print(f"Note: sensor_data device_id migration: {e}")
-                try:
-                    cur.fetchall()
-                except:
-                    pass
-            
-            # Backfill user_id and device_id from sensors table for existing records
+                conn.commit()
+                print("Added device_id column to sensor_data table")
+            cur.fetchall()  # Consume any remaining results
+        except Exception as e:
+            print(f"Note: sensor_data device_id migration: {e}")
             try:
+                cur.fetchall()
+            except:
+                pass
+        
+        # Backfill user_id and device_id from sensors table for existing records
+        try:
                 cur.execute(f"""
                     UPDATE {quote_char}sensor_data{quote_char} sd
                     JOIN {quote_char}sensors{quote_char} s ON s.id = sd.sensor_id
-                    SET sd.user_id = s.user_id, sd.device_id = s.device_id
-                    WHERE sd.user_id IS NULL OR sd.device_id IS NULL
-                """)
-                rows_updated = cur.rowcount
-                if rows_updated > 0:
-                    conn.commit()
-                    print(f"Backfilled user_id and device_id for {rows_updated} existing sensor_data records")
-                cur.fetchall()  # Consume any remaining results
-            except Exception as e:
-                print(f"Note: sensor_data backfill: {e}")
-                try:
-                    cur.fetchall()
-                except:
-                    pass
+                SET sd.user_id = s.user_id, sd.device_id = s.device_id
+                WHERE sd.user_id IS NULL OR sd.device_id IS NULL
+            """)
+            rows_updated = cur.rowcount
+            if rows_updated > 0:
+                conn.commit()
+                print(f"Backfilled user_id and device_id for {rows_updated} existing sensor_data records")
+            cur.fetchall()  # Consume any remaining results
+        except Exception as e:
+            print(f"Note: sensor_data backfill: {e}")
+            try:
+                cur.fetchall()
+            except:
+                pass
     except Exception:
         pass
     # MySQL-specific migration code - skip for PostgreSQL (columns already in CREATE TABLE)
     if DB_TYPE != 'postgresql':
-        # Ensure legacy schemas allow NULL public_key
-        try:
+    # Ensure legacy schemas allow NULL public_key
+    try:
             cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} MODIFY COLUMN public_key TEXT NULL")
-        except Exception:
-            # Ignore if already NULL or if permissions prevent alter
-            pass
-        # Note: we no longer drop legacy columns automatically to avoid accidental data loss.
-        # Ensure threshold columns exist
-        try:
+    except Exception:
+        # Ignore if already NULL or if permissions prevent alter
+        pass
+    # Note: we no longer drop legacy columns automatically to avoid accidental data loss.
+    # Ensure threshold columns exist
+    try:
             cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN min_threshold {double_type} NULL")
-        except Exception:
-            pass
-        try:
+    except Exception:
+        pass
+    try:
             cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN max_threshold {double_type} NULL")
-        except Exception:
-            pass
-        # Ensure sensor_type_id column exists (for FK to sensor_type)
-        try:
+    except Exception:
+        pass
+    # Ensure sensor_type_id column exists (for FK to sensor_type)
+    try:
             cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN sensor_type_id INT NULL")
-        except Exception:
-            pass
-        # Backfill sensor_type_id from device_type where possible
-        try:
-            cur.execute(
+    except Exception:
+        pass
+    # Backfill sensor_type_id from device_type where possible
+    try:
+        cur.execute(
                 f"""
                 UPDATE {quote_char}sensors{quote_char} s
                 JOIN {quote_char}sensor_type{quote_char} st ON st.type_name = s.device_type
-                SET s.sensor_type_id = st.id
-                WHERE s.sensor_type_id IS NULL
-                """
-            )
-            # Consume any results (UPDATE doesn't return results, but be safe)
-            try:
-                cur.fetchall()
-            except:
-                pass
-        except Exception:
-            # Try to consume results even on error
-            try:
-                cur.fetchall()
-            except:
-                pass
-        # Add index and FK constraint (best-effort, ignore if exists)
+            SET s.sensor_type_id = st.id
+            WHERE s.sensor_type_id IS NULL
+            """
+        )
+        # Consume any results (UPDATE doesn't return results, but be safe)
         try:
-            cur.execute(f"CREATE INDEX idx_sensors_sensor_type_id ON {quote_char}sensors{quote_char}(sensor_type_id)")
-            try:
-                cur.fetchall()
-            except:
-                pass
-        except Exception:
+            cur.fetchall()
+        except:
             pass
+    except Exception:
+        # Try to consume results even on error
         try:
-            cur.execute(
+            cur.fetchall()
+        except:
+            pass
+    # Add index and FK constraint (best-effort, ignore if exists)
+    try:
+            cur.execute(f"CREATE INDEX idx_sensors_sensor_type_id ON {quote_char}sensors{quote_char}(sensor_type_id)")
+        try:
+            cur.fetchall()
+        except:
+            pass
+    except Exception:
+        pass
+    try:
+        cur.execute(
                 f"""
                 ALTER TABLE {quote_char}sensors{quote_char}
-                ADD CONSTRAINT fk_sensors_sensor_type
+            ADD CONSTRAINT fk_sensors_sensor_type
                 FOREIGN KEY (sensor_type_id) REFERENCES {quote_char}sensor_type{quote_char}(id)
-                ON UPDATE CASCADE
-                ON DELETE SET NULL
-                """
-            )
-            try:
-                cur.fetchall()
-            except:
-                pass
-        except Exception:
+            ON UPDATE CASCADE
+            ON DELETE SET NULL
+            """
+        )
+        try:
+            cur.fetchall()
+        except:
             pass
+    except Exception:
+        pass
     # Device sessions table for secure device-server communication
     if DB_TYPE == 'postgresql':
         # PostgreSQL: Use trigger for ON UPDATE CURRENT_TIMESTAMP
-        cur.execute(
+    cur.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {quote_char}device_sessions{quote_char} (
                 id {auto_inc} PRIMARY KEY,
@@ -616,20 +626,20 @@ def _ensure_schema(conn) -> None:
             f"""
             CREATE TABLE IF NOT EXISTS {quote_char}device_sessions{quote_char} (
                 id {auto_inc} PRIMARY KEY,
-                session_token VARCHAR(255) NOT NULL UNIQUE,
-                device_id VARCHAR(100) NOT NULL,
-                counter INT DEFAULT 0,
+            session_token VARCHAR(255) NOT NULL UNIQUE,
+            device_id VARCHAR(100) NOT NULL,
+            counter INT DEFAULT 0,
                 expires_at {datetime_type} NOT NULL,
                 created_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
                 last_used_at {datetime_type} DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                INDEX idx_device_sessions_token (session_token),
-                INDEX idx_device_sessions_device (device_id),
-                INDEX idx_device_sessions_expires (expires_at),
-                CONSTRAINT fk_device_sessions_device FOREIGN KEY (device_id)
+            INDEX idx_device_sessions_token (session_token),
+            INDEX idx_device_sessions_device (device_id),
+            INDEX idx_device_sessions_expires (expires_at),
+            CONSTRAINT fk_device_sessions_device FOREIGN KEY (device_id)
                     REFERENCES {quote_char}sensors{quote_char}(device_id) ON UPDATE CASCADE ON DELETE CASCADE
-            )
-            """
         )
+        """
+    )
     # Per-user thresholds table removed; using sensor_type defaults and per-sensor overrides
     conn.commit()
     cur.close()
@@ -644,8 +654,8 @@ def get_pool():
                 test_conn = _pool.getconn()
                 _pool.putconn(test_conn)
             else:
-                test_conn = _pool.get_connection()
-                test_conn.close()
+            test_conn = _pool.get_connection()
+            test_conn.close()
             return _pool
         except Exception as e:
             print(f"WARNING: Existing pool is invalid, recreating: {e}")
@@ -685,65 +695,65 @@ def get_pool():
             return None
     else:
         # MySQL connection
-        try:
-            _pool = pooling.MySQLConnectionPool(
-                pool_name="water_pool",
-                pool_size=5,
-                host=DB_HOST,
-                port=DB_PORT,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                database=DB_NAME,
-            )
+    try:
+        _pool = pooling.MySQLConnectionPool(
+            pool_name="water_pool",
+            pool_size=5,
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+        )
             print("DEBUG: MySQL connection pool created successfully")
-            
-            # Test the connection
-            _conn = _pool.get_connection()
-            print("DEBUG: Test connection obtained from pool")
-            _ensure_schema(_conn)
-            _conn.close()
-            print("DEBUG: MySQL database connection pool initialized successfully")
-            return _pool
-        except Error as init_err:
-            errno = getattr(init_err, 'errno', None)
-            print(f"ERROR: MySQL connection error (errno: {errno}): {init_err}")
-            import traceback
-            traceback.print_exc()
-            
-            if errno == errorcode.ER_BAD_DB_ERROR:
-                print("DEBUG: Database does not exist, attempting to create...")
-                _create_database_if_missing()
-                try:
-                    _pool = pooling.MySQLConnectionPool(
-                        pool_name="water_pool",
-                        pool_size=5,
-                        host=DB_HOST,
-                        port=DB_PORT,
-                        user=DB_USER,
-                        password=DB_PASSWORD,
-                        database=DB_NAME,
-                    )
-                    _conn = _pool.get_connection()
-                    _ensure_schema(_conn)
-                    _return_connection(_pool, _conn)
-                    print("DEBUG: Database created and connection pool initialized")
-                    return _pool
-                except Exception as retry_err:
-                    _pool = None
-                    print(f"ERROR: MySQL init retry failed: {retry_err}")
-                    import traceback
-                    traceback.print_exc()
-            else:
-                _pool = None
-                print(f"ERROR: MySQL init failed: {init_err}")
-                print(f"ERROR: Check MySQL server is running and credentials are correct")
-        except Exception as e:
-            _pool = None
-            print(f"ERROR: Unexpected error initializing database pool: {e}")
-            import traceback
-            traceback.print_exc()
         
+        # Test the connection
+        _conn = _pool.get_connection()
+        print("DEBUG: Test connection obtained from pool")
+        _ensure_schema(_conn)
+        _conn.close()
+            print("DEBUG: MySQL database connection pool initialized successfully")
         return _pool
+    except Error as init_err:
+        errno = getattr(init_err, 'errno', None)
+        print(f"ERROR: MySQL connection error (errno: {errno}): {init_err}")
+        import traceback
+        traceback.print_exc()
+        
+        if errno == errorcode.ER_BAD_DB_ERROR:
+            print("DEBUG: Database does not exist, attempting to create...")
+            _create_database_if_missing()
+            try:
+                _pool = pooling.MySQLConnectionPool(
+                    pool_name="water_pool",
+                    pool_size=5,
+                    host=DB_HOST,
+                    port=DB_PORT,
+                    user=DB_USER,
+                    password=DB_PASSWORD,
+                    database=DB_NAME,
+                )
+                _conn = _pool.get_connection()
+                _ensure_schema(_conn)
+                    _return_connection(_pool, _conn)
+                print("DEBUG: Database created and connection pool initialized")
+                return _pool
+            except Exception as retry_err:
+                _pool = None
+                print(f"ERROR: MySQL init retry failed: {retry_err}")
+                import traceback
+                traceback.print_exc()
+        else:
+            _pool = None
+            print(f"ERROR: MySQL init failed: {init_err}")
+            print(f"ERROR: Check MySQL server is running and credentials are correct")
+    except Exception as e:
+        _pool = None
+        print(f"ERROR: Unexpected error initializing database pool: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    return _pool
 
 
 def insert_reading(tds: float, ph: float, turbidity: float, safe: bool, reasons) -> None:
