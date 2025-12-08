@@ -19,6 +19,9 @@
             padding: 0;
             color: var(--text-primary);
             transition: background-color 0.3s ease, color 0.3s ease;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
         .container {
             max-width: 600px;
@@ -28,6 +31,8 @@
             box-shadow: var(--shadow-lg);
             padding: 32px 24px;
             transition: background-color 0.3s ease, box-shadow 0.3s ease;
+            flex: 1;
+            margin-bottom: 120px; /* Space for fixed footer */
         }
         h1 {
             text-align: center;
@@ -113,6 +118,10 @@
             background: #fef3c7;
             color: #92400e;
         }
+        .status-indicator.not-connected {
+            background: #fef3c7;
+            color: #92400e;
+        }
         .status-dot {
             width: 8px;
             height: 8px;
@@ -164,6 +173,7 @@
         }
         .safe { background: #d4f5e9; color: #217a4d; border: 1px solid #b2e6d2; }
         .unsafe { background: #ffe3e3; color: #b02a37; border: 1px solid #ffb3b3; }
+        .offline { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
         .issues { color: #9b2c2c; font-size: 0.95rem; margin-top: 8px; }
         .muted { color: var(--text-muted); transition: color 0.3s ease; }
         .stale-warning {
@@ -240,7 +250,7 @@
 <body>
     {% include 'sidebar.html' %}
     <div class="container">
-        <h1>Live Water Readings by Tank</h1>
+        <h1>Live Water Readings by Location</h1>
         <div class="sub">Real-time water quality monitoring</div>
         
         <div class="controls">
@@ -257,9 +267,9 @@
                 </select>
             </div>
             <div class="control-group">
-                <div id="connectionStatus" class="status-indicator">
+                <div id="connectionStatus" class="status-indicator not-connected">
                     <span class="status-dot"></span>
-                    <span>Connecting...</span>
+                    <span>Not Connected</span>
                 </div>
             </div>
         </div>
@@ -268,7 +278,7 @@
         <div id="loadingIndicator" class="loading-overlay" style="display:none;">Loading data...</div>
         
         <ul id="sensor_list" class="reading-list"></ul>
-        <div id="status" class="safe-status muted">Waiting for data…</div>
+        <div id="status" class="safe-status offline">⚠️ Device Offline - No sensors connected</div>
         <div id="issues" class="issues" style="display:none"></div>
         <div id="lastUpdate" class="last-update"></div>
     </div>
@@ -278,7 +288,6 @@
         let isPaused = false;
         let refreshInterval = 20000;
         let intervalId1 = null;
-        let intervalId2 = null;
         let lastUpdateTime = null;
         let consecutiveErrors = 0;
         let previousData = null;
@@ -296,7 +305,16 @@
                 text.textContent = 'Disconnected';
             } else if (status === 'loading') {
                 text.textContent = 'Loading...';
+            } else if (status === 'not-connected') {
+                text.textContent = 'Not Connected';
             }
+        }
+        
+        // Check if any devices are connected
+        function hasConnectedDevices(data) {
+            if (!data || !data.active_sensors) return false;
+            return data.active_sensors.length > 0 && 
+                   data.active_sensors.some(s => s.value !== null && s.value !== undefined);
         }
 
         // Update last update timestamp
@@ -351,7 +369,7 @@
                     if (!res.ok) throw new Error(`HTTP ${res.status}`);
                     const data = await res.json();
                     consecutiveErrors = 0;
-                    updateConnectionStatus('connected');
+                    // Don't update connection status here - let fetchActives handle it
                     return data;
                 } catch (e) {
                     if (i === retries - 1) {
@@ -435,7 +453,7 @@
                 
                 const hval = document.createElement('span');
                 hval.className = 'reading-value';
-                hval.textContent = 'Tank';
+                hval.textContent = 'Location';
                 
                 header.appendChild(headerLeft);
                 header.appendChild(hval);
@@ -493,17 +511,25 @@
             previousData = JSON.parse(JSON.stringify(data));
         }
 
-        function updateSafety(data){
-            if (!data) return;
+        function updateSafety(data, hasDevices = false){
+            if (!data || !hasDevices) {
+                // No devices connected - show offline status
+                setStatus(null, null, [], true);
+                return;
+            }
             const issues = Array.isArray(data.safety_issues) ? data.safety_issues : [];
-            setStatus(data.safe_to_drink, data.safe_to_drink, issues);
+            const reasons = Array.isArray(data.reasons) ? data.reasons : issues;
+            setStatus(data.safe_to_drink, data.safe_to_drink, reasons, false);
         }
         
-        function setStatus(textOrSafe, safeFlag, issues){
+        function setStatus(textOrSafe, safeFlag, issues, isOffline = false){
             const statusEl = document.getElementById('status');
-            statusEl.classList.remove('safe','unsafe','muted');
+            statusEl.classList.remove('safe','unsafe','muted','offline');
             let text = '';
-            if (typeof textOrSafe === 'boolean') {
+            if (isOffline) {
+                statusEl.classList.add('offline');
+                text = '⚠️ Device Offline - No sensors connected';
+            } else if (typeof textOrSafe === 'boolean') {
                 if (textOrSafe) {
                     statusEl.classList.add('safe');
                     text = '✅ Water is SAFE to drink.';
@@ -518,7 +544,7 @@
             statusEl.textContent = text;
 
             const issuesEl = document.getElementById('issues');
-            if (issues && issues.length) {
+            if (issues && issues.length && !isOffline) {
                 issuesEl.style.display = 'block';
                 issuesEl.textContent = 'Issues: ' + issues.join('; ');
             } else {
@@ -534,23 +560,39 @@
                 setLoading(true);
                 updateConnectionStatus('loading');
                 const data = await fetchWithRetry("{{ url_for('api_active_sensors') }}");
+                const hasDevices = hasConnectedDevices(data);
                 updateUI(data);
                 updateLastUpdateTime();
+                
+                // Update connection status based on whether devices are connected
+                if (hasDevices) {
+                    updateConnectionStatus('connected');
+                } else {
+                    updateConnectionStatus('not-connected');
+                }
+                
                 setLoading(false);
+                return { data, hasDevices };
             } catch(e) {
-                setStatus('Unable to fetch active sensors', null, []);
+                updateConnectionStatus('disconnected');
+                setStatus('Unable to fetch active sensors', null, [], false);
                 setLoading(false);
                 console.error('Fetch error:', e);
+                return { data: null, hasDevices: false };
             }
         }
         
-        async function fetchSafety(){
+        async function fetchSafety(hasDevices = false){
             if (isPaused) return;
             try {
+                if (!hasDevices) {
+                    updateSafety(null, false);
+                    return;
+                }
                 const data = await fetchWithRetry("{{ url_for('api_latest') }}");
-                updateSafety(data);
+                updateSafety(data, hasDevices);
             } catch(e) {
-                setStatus('Waiting for data…', null, []);
+                updateSafety(null, hasDevices);
                 console.error('Safety fetch error:', e);
             }
         }
@@ -562,10 +604,10 @@
             if (isPaused) {
                 btn.textContent = '▶ Resume';
                 btn.classList.add('btn-secondary');
-                if (intervalId1) clearInterval(intervalId1);
-                if (intervalId2) clearInterval(intervalId2);
-                intervalId1 = null;
-                intervalId2 = null;
+                if (intervalId1) {
+                    clearInterval(intervalId1);
+                    intervalId1 = null;
+                }
             } else {
                 btn.textContent = '⏸ Pause';
                 btn.classList.remove('btn-secondary');
@@ -575,26 +617,45 @@
 
         function changeInterval() {
             const select = document.getElementById('intervalSelect');
-            refreshInterval = parseInt(select.value);
-            if (!isPaused) {
-                if (intervalId1) clearInterval(intervalId1);
-                if (intervalId2) clearInterval(intervalId2);
-                startIntervals();
+            const newInterval = parseInt(select.value);
+            if (newInterval !== refreshInterval) {
+                refreshInterval = newInterval;
+                if (!isPaused) {
+                    if (intervalId1) {
+                        clearInterval(intervalId1);
+                        intervalId1 = null;
+                    }
+                    startIntervals();
+                }
             }
         }
 
         function startIntervals() {
-            intervalId1 = setInterval(fetchActives, refreshInterval);
-            intervalId2 = setInterval(fetchSafety, refreshInterval);
+            intervalId1 = setInterval(async () => {
+                const result = await fetchActives();
+                if (result && result.hasDevices !== undefined) {
+                    fetchSafety(result.hasDevices);
+                }
+            }, refreshInterval);
         }
 
         async function manualRefresh() {
             const btn = document.getElementById('refreshBtn');
             btn.disabled = true;
             btn.textContent = '⏳ Refreshing...';
-            await Promise.all([fetchActives(), fetchSafety()]);
-            btn.disabled = false;
-            btn.textContent = '🔄 Refresh';
+            try {
+                const result = await fetchActives();
+                if (result && result.hasDevices !== undefined) {
+                    await fetchSafety(result.hasDevices);
+                } else {
+                    await fetchSafety(false);
+                }
+            } catch (e) {
+                console.error('Manual refresh error:', e);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '🔄 Refresh';
+            }
         }
 
         async function requestReadingForLocation(location) {
@@ -651,9 +712,15 @@
         }
 
         // Initialize
-        fetchActives();
-        fetchSafety();
-        startIntervals();
+        (async function() {
+            const result = await fetchActives();
+            if (result && result.hasDevices !== undefined) {
+                await fetchSafety(result.hasDevices);
+            } else {
+                await fetchSafety(false);
+            }
+            startIntervals();
+        })();
         
         // Check for stale data periodically
         setInterval(checkStaleData, 5000);
