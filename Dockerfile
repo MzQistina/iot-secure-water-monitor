@@ -36,11 +36,8 @@ ENV PORT=10000
 ENV FLASK_ENV=production
 ENV PYTHONUNBUFFERED=1
 
-# Health check (optional)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:$PORT/')" || exit 1
-
 # Run application with Gunicorn
-CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 app:app
+# Note: Render handles health checks automatically, so we don't need a Docker HEALTHCHECK
+CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - --error-logfile - app:app
 
 
