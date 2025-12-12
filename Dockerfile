@@ -28,16 +28,18 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p keys user_keys sensor_keys templates static
 
-# Expose port (Render uses $PORT, others use 10000)
-EXPOSE 10000
+# Expose port (default 5000 for docker-compose, 10000 for Render)
+EXPOSE 5000
 
 # Set default environment variables
-ENV PORT=10000
+ENV PORT=5000
 ENV FLASK_ENV=production
 ENV PYTHONUNBUFFERED=1
 
 # Run application with Gunicorn
-# Note: Render handles health checks automatically, so we don't need a Docker HEALTHCHECK
-CMD exec gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 120 --access-logfile - --error-logfile - app:app
+# Use PORT environment variable (defaults to 5000)
+# For docker-compose: PORT=5000
+# For Render: PORT=10000 (or use $PORT from Render)
+CMD exec gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --threads 4 --timeout 120 --access-logfile - --error-logfile - app:app
 
 

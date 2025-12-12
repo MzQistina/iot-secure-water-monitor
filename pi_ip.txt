@@ -1,0 +1,160 @@
+# Copy-paste this entire block into Raspbian terminal to fix eth1 IPv4 issue (using .102 to match certificate CN):
+
+# STEP 1: Disable dhcpcd for eth1 (important - prevents interference)
+echo "=== Step 1: Disable dhcpcd for eth1 ==="
+if ! grep -q "denyinterfaces eth1" /etc/dhcpcd.conf; then
+    echo "denyinterfaces eth1" | sudo tee -a /etc/dhcpcd.conf
+    echo "✅ Added denyinterfaces eth1 to dhcpcd.conf"
+else
+    echo "✅ denyinterfaces eth1 already in dhcpcd.conf"
+fi
+sudo systemctl restart dhcpcd
+sleep 2
+
+# STEP 2: Remove any existing IPs and assign .102
+echo "=== Step 2: Assign IP 192.168.56.102 ==="
+sudo ip addr del 192.168.56.102/24 dev eth1 2>/dev/null || true
+sudo ip addr del 192.168.56.101/24 dev eth1 2>/dev/null || true
+sudo ip link set eth1 up
+sleep 1
+sudo ip addr add 192.168.56.102/24 dev eth1
+ip addr show eth1 | grep "inet 192.168.56.102" && echo "✅ IP assigned successfully!" || echo "❌ IP assignment failed"
+
+# STEP 3: Create improved script with better error handling
+echo "=== Step 3: Create improved script ==="
+sudo tee /usr/local/bin/set-eth1-ip.sh > /dev/null <<'EOF'
+#!/bin/bash
+INTERFACE="eth1"
+IP_ADDRESS="192.168.56.102/24"
+
+echo "Starting set-eth1-ip.sh for $INTERFACE"
+
+# Wait for interface to be available (up to 30 seconds)
+for i in {1..30}; do
+    if ip link show "$INTERFACE" >/dev/null 2>&1; then
+        echo "Interface $INTERFACE found after $i seconds"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        echo "Error: Interface $INTERFACE not found after 30 seconds"
+        exit 1
+    fi
+    sleep 1
+done
+
+# Check if interface exists
+if ! ip link show "$INTERFACE" >/dev/null 2>&1; then
+    echo "Error: Interface $INTERFACE does not exist"
+    exit 1
+fi
+
+# Bring interface up
+echo "Bringing $INTERFACE up"
+ip link set "$INTERFACE" up || {
+    echo "Error: Failed to bring $INTERFACE up"
+    exit 1
+}
+
+# Wait for interface to stabilize
+sleep 2
+
+# Check if IP is already assigned
+if ip addr show "$INTERFACE" | grep -q "192.168.56.102"; then
+    echo "IP 192.168.56.102 already assigned to $INTERFACE"
+    exit 0
+fi
+
+# Remove any existing IPv4 addresses on eth1 (except the one we want)
+for addr in $(ip addr show "$INTERFACE" | grep "inet " | awk '{print $2}'); do
+    if [ "$addr" != "$IP_ADDRESS" ]; then
+        echo "Removing existing IP $addr from $INTERFACE"
+        ip addr del "$addr" dev "$INTERFACE" 2>/dev/null || true
+    fi
+done
+
+# Assign IP address
+echo "Assigning $IP_ADDRESS to $INTERFACE"
+if ip addr add "$IP_ADDRESS" dev "$INTERFACE" 2>/dev/null; then
+    echo "Successfully assigned $IP_ADDRESS to $INTERFACE"
+    exit 0
+else
+    # Check if it's already there (race condition)
+    if ip addr show "$INTERFACE" | grep -q "192.168.56.102"; then
+        echo "IP already assigned (race condition)"
+        exit 0
+    else
+        echo "Failed to assign IP address"
+        exit 1
+    fi
+fi
+EOF
+
+# STEP 4: Make script executable
+echo "=== Step 4: Make script executable ==="
+sudo chmod +x /usr/local/bin/set-eth1-ip.sh
+
+# STEP 5: Update service file
+echo "=== Step 5: Update service file ==="
+sudo tee /etc/systemd/system/eth1-static-ip.service > /dev/null <<EOF
+[Unit]
+Description=Configure static IP for eth1 (Host-only adapter)
+After=network-pre.target
+Before=network.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/set-eth1-ip.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# STEP 4: Make script executable
+echo "=== Step 4: Make script executable ==="
+sudo chmod +x /usr/local/bin/set-eth1-ip.sh
+
+# STEP 5: Update service file
+echo "=== Step 5: Update service file ==="
+sudo tee /etc/systemd/system/eth1-static-ip.service > /dev/null <<EOF
+[Unit]
+Description=Configure static IP for eth1 (Host-only adapter)
+After=network-pre.target
+Before=network.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/set-eth1-ip.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# STEP 6: Reload systemd and restart service
+echo "=== Step 6: Reload and restart service ==="
+sudo systemctl daemon-reload
+sudo systemctl enable eth1-static-ip.service
+sudo systemctl restart eth1-static-ip.service
+
+# STEP 7: Verify
+echo "=== Step 7: Verification ==="
+echo "Service status:"
+sudo systemctl status eth1-static-ip.service --no-pager -l
+echo ""
+echo "Interface status:"
+ip addr show eth1
+echo ""
+echo "Service logs:"
+sudo journalctl -u eth1-static-ip.service -n 10 --no-pager
+echo ""
+echo "=== Done! Check if eth1 now has IPv4 address 192.168.56.102 (matches certificate CN) ==="
+
+
+mosquitto_pub -h 192.168.56.102 -p 8883 -t water/data -m '{"data": "{\"iv\": \"y5VUSafFitQt8qRfzn260g==\", \"ciphertext\": \"1jfNIyqT8WeBJB4aHJYPV8wczsuxW0TI2wQEriptZhD0BAb25WfNbHxZrXpsygmQpL7GL4lI5LMULn8SW8hjmA==\"}", "hash": "7414579365e2eef9daf1af1324724464ee506f909a028b9ffd6377311babc44e"}' --cafile /etc/mosquitto/certs/ca-cert.pem

@@ -13,8 +13,8 @@
         })();
     </script>
     <style>
-        body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg-primary); margin: 0; color: var(--text-primary); transition: background-color 0.3s ease, color 0.3s ease; }
-        .container { max-width: 900px; margin: 30px auto; background: var(--bg-secondary); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 24px; position: relative; z-index: 1; transition: background-color 0.3s ease, box-shadow 0.3s ease; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: var(--bg-primary); margin: 0; color: var(--text-primary); transition: background-color 0.3s ease, color 0.3s ease; min-height: 100vh; display: flex; flex-direction: column; }
+        .container { max-width: 900px; margin: 30px auto; background: var(--bg-secondary); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 24px; position: relative; z-index: 1; transition: background-color 0.3s ease, box-shadow 0.3s ease; flex: 1; margin-bottom: 120px; }
         h1 { color: var(--text-primary); margin: 0 0 6px; transition: color 0.3s ease; }
         .subtitle { color: var(--text-secondary); margin-bottom: 20px; transition: color 0.3s ease; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -117,14 +117,15 @@
                     <label for="device_type">Sensor Type</label>
                     <select id="device_type" name="device_type" required onchange="onTypeChange(this.value)">
                         <option value="">-- select sensor type --</option>
-                        {% if sensor_types %}
+                        {% if sensor_types and sensor_types|length > 0 %}
                             {% for t in sensor_types %}
                                 {% if t.type_name %}
-                                <option value="{{ t.type_name }}" {% if selected_type == t.type_name %}selected{% endif %}>{{ t.type_name }}</option>
+                                    <option value="{{ t.type_name }}" {% if selected_type == t.type_name %}selected{% endif %}>{{ t.type_name }}</option>
+                                {% elif t['type_name'] %}
+                                    <option value="{{ t['type_name'] }}" {% if selected_type == t['type_name'] %}selected{% endif %}>{{ t['type_name'] }}</option>
                                 {% endif %}
                             {% endfor %}
-                        {% endif %}
-                        {% if not sensor_types or sensor_types|length == 0 %}
+                        {% else %}
                             <option value="" disabled>No sensor types available</option>
                         {% endif %}
                     </select>
@@ -170,17 +171,17 @@
             </div>
 
             <div class="grid-1">
-                <div class="field" style="background:#f7fbff; padding:14px; border-radius:8px;">
-                    <label>Threshold for Selected Type</label>
-                    <div style="color:#5b748c; margin-bottom:8px;">Default: <span id="def_min">{{ default_min if default_min is not none else '-' }}</span> to <span id="def_max">{{ default_max if default_max is not none else '-' }}</span></div>
+                <div class="field" style="background: var(--bg-tertiary); padding:14px; border-radius:8px; border: 1px solid var(--border-color);">
+                    <label style="color: var(--text-primary);">Threshold for Selected Type</label>
+                    <div style="color: var(--text-secondary); margin-bottom:8px;">Default: <span id="def_min">{{ default_min if default_min is not none else '-' }}</span> to <span id="def_max">{{ default_max if default_max is not none else '-' }}</span></div>
                     <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-                        <label><input type="checkbox" id="type_use_default" name="type_use_default" checked onchange="toggleTypeInputs()"> Use default threshold</label>
+                        <label style="color: var(--text-primary);"><input type="checkbox" id="type_use_default" name="type_use_default" checked onchange="toggleTypeInputs()"> Use default threshold</label>
                         <div>
-                            <label for="type_min" style="display:block; font-weight:600;">Min</label>
+                            <label for="type_min" style="display:block; font-weight:600; color: var(--text-primary);">Min</label>
                             <input type="number" step="any" id="type_min" name="type_min" disabled>
                         </div>
                         <div>
-                            <label for="type_max" style="display:block; font-weight:600;">Max</label>
+                            <label for="type_max" style="display:block; font-weight:600; color: var(--text-primary);">Max</label>
                             <input type="number" step="any" id="type_max" name="type_max" disabled>
                         </div>
                     </div>

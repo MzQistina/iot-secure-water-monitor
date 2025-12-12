@@ -41,6 +41,8 @@ Render is a modern cloud platform that makes deploying Flask applications **much
 ✅ **Automatic scaling** - Handles traffic spikes  
 ✅ **Built-in logging** - View logs in dashboard  
 
+**💡 Using Other Hosting Platforms?** You can use your supervisor's MySQL database with **any hosting platform** (PythonAnywhere, LiteSpeed, Docker, etc.). See **[HOSTING_ALTERNATIVES_GUIDE.md](HOSTING_ALTERNATIVES_GUIDE.md)** for platform comparison and setup instructions.
+
 ## Prerequisites
 
 1. **GitHub account** (or GitLab/Bitbucket)
@@ -517,6 +519,8 @@ If you prefer to use Render's managed database:
 **Note:** This requires code changes. Using external MySQL (Option 1) is simpler if you already have MySQL credentials.
 
 ## Step 5: Configure Custom Domain
+
+**💡 New to domains?** See **[DOMAIN_CONFIGURATION_GUIDE.md](DOMAIN_CONFIGURATION_GUIDE.md)** for complete explanation of database domain vs application domain.
 
 **You're using a custom domain, so follow these steps:**
 

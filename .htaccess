@@ -1,0 +1,32 @@
+# .htaccess file for Apache/mod_wsgi or Passenger deployment
+# Place this in your public_html or application root directory
+
+# Enable Passenger (if using Passenger)
+PassengerEnabled On
+PassengerPython /usr/bin/python3
+# Or specify your virtual environment Python:
+# PassengerPython /home/admin/venv/bin/python3
+
+# Point to your WSGI file
+PassengerAppRoot /home/admin/iot-secure-water-monitor
+PassengerBaseURI /
+PassengerAppType wsgi
+PassengerStartupFile passenger_wsgi.py
+
+# Alternative: For mod_wsgi (if not using Passenger)
+# WSGIDaemonProcess flaskapp python-path=/home/admin/iot-secure-water-monitor python-home=/home/admin/venv
+# WSGIProcessGroup flaskapp
+# WSGIScriptAlias / /home/admin/iot-secure-water-monitor/passenger_wsgi.py
+
+# Security headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+# Redirect to HTTPS (if SSL is configured)
+# RewriteEngine On
+# RewriteCond %{HTTPS} off
+# RewriteRule ^(.*)$ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+

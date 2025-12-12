@@ -114,7 +114,7 @@
         <form method="post" action="{{ url_for('profile') }}" autocomplete="off">
             <div class="field">
                 <label for="email">Email</label>
-                <input id="email" name="email" type="email" maxlength="255" value="{{ user.email }}" required pattern="[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}" title="Please enter a valid email address">
+                <input id="email" name="email" type="email" maxlength="255" value="{{ user.email }}" required pattern="[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}" title="Please enter a valid email address">
             </div>
             <div class="field">
                 <label for="name">Full name</label>

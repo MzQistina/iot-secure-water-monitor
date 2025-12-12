@@ -90,9 +90,14 @@ def main():
     # Subscribe to all provision requests: provision/<device_id>/request
     request_topic = f"{prov_base}/+/request"
 
-    def on_connect(client, userdata, flags, rc):
-        print('Provision agent connected:', rc)
-        client.subscribe(request_topic)
+    def on_connect(client, userdata, flags, reason_code, properties):
+        """Callback when MQTT client connects (API v2)."""
+        print(f'Provision agent connected: rc={reason_code}')
+        if reason_code == 0:
+            client.subscribe(request_topic)
+            print(f'Provision agent subscribed to: {request_topic}')
+        else:
+            print(f'Provision agent connection failed: rc={reason_code}')
 
     def on_message(client, userdata, msg):
         try:
@@ -153,7 +158,8 @@ def main():
             import traceback
             traceback.print_exc()
 
-    client = mqtt.Client()
+    # Create MQTT client with API v2 (fixes deprecation warning)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     
     # Configure authentication
     if mqtt_user and mqtt_password:

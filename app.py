@@ -73,6 +73,11 @@ def handle_exception(e):
     import sys
     import traceback
     from flask import request
+    from werkzeug.exceptions import NotFound
+    
+    # Ignore 404 errors for favicon requests (browsers auto-request these)
+    if isinstance(e, NotFound) and ('favicon' in request.path.lower() or 'favicon.ico' in request.path.lower()):
+        return '', 204  # No Content - silently ignore missing favicon
     
     error_msg = f"ERROR: Unhandled exception in route {request.path} [{request.method}]: {str(e)}"
     exception_type = type(e).__name__
@@ -349,11 +354,22 @@ def start_mqtt_key_subscriber():
     mqtt_keyfile = os.environ.get('MQTT_KEYFILE')  # Client private key file
     mqtt_tls_insecure = os.environ.get('MQTT_TLS_INSECURE', 'false').lower() in ('true', '1', 'yes')  # Skip certificate validation (for self-signed certs)
 
-    def _on_connect(client, userdata, flags, rc):
+    # Connection state tracking (nonlocal variable for nested functions)
+    mqtt_connected = False
+    
+    def _on_connect(client, userdata, flags, reason_code, properties):
+        """Callback when MQTT client connects (API v2)."""
+        nonlocal mqtt_connected
         try:
-            client.subscribe(mqtt_topic)
-            print(f"MQTT: connected rc={rc}; subscribed to '{mqtt_topic}'")
+            if reason_code == 0:
+                client.subscribe(mqtt_topic)
+                mqtt_connected = True
+                print(f"MQTT: connected rc={reason_code}; subscribed to '{mqtt_topic}'")
+            else:
+                mqtt_connected = False
+                print(f"MQTT: connection failed with rc={reason_code}")
         except Exception as e:
+            mqtt_connected = False
             print(f"MQTT subscribe error: {e}")
 
     def _on_message(client, userdata, msg):
@@ -407,52 +423,118 @@ def start_mqtt_key_subscriber():
             print(f"MQTT message error: {e}")
 
     def _run():
-        try:
-            client = mqtt.Client()
-            
-            # Configure authentication
-            if mqtt_user and mqtt_password:
-                client.username_pw_set(mqtt_user, mqtt_password)
-            
-            # Configure TLS/SSL if enabled
-            if mqtt_use_tls:
+        import time
+        retry_count = 0
+        max_retries = 10  # Maximum retry attempts before giving up
+        base_delay = 5  # Base delay in seconds
+        
+        while retry_count < max_retries:
+            try:
+                # Create MQTT client with API v2 (fixes deprecation warning)
+                client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+                
+                # Configure authentication
+                if mqtt_user and mqtt_password:
+                    client.username_pw_set(mqtt_user, mqtt_password)
+                
+                # Configure TLS/SSL if enabled
+                if mqtt_use_tls:
+                    try:
+                        if mqtt_ca_certs and os.path.exists(mqtt_ca_certs):
+                            # Use CA certificate for validation
+                            client.tls_set(
+                                ca_certs=mqtt_ca_certs,
+                                certfile=mqtt_certfile if (mqtt_certfile and os.path.exists(mqtt_certfile)) else None,
+                                keyfile=mqtt_keyfile if (mqtt_keyfile and os.path.exists(mqtt_keyfile)) else None,
+                                cert_reqs=ssl.CERT_REQUIRED if not mqtt_tls_insecure else ssl.CERT_NONE,
+                                tls_version=ssl.PROTOCOL_TLS
+                            )
+                            print(f"MQTT: TLS enabled with CA cert: {mqtt_ca_certs}")
+                        else:
+                            # Use system CA certificates (default)
+                            client.tls_set(
+                                certfile=mqtt_certfile if (mqtt_certfile and os.path.exists(mqtt_certfile)) else None,
+                                keyfile=mqtt_keyfile if (mqtt_keyfile and os.path.exists(mqtt_keyfile)) else None,
+                                cert_reqs=ssl.CERT_NONE if mqtt_tls_insecure else ssl.CERT_REQUIRED,
+                                tls_version=ssl.PROTOCOL_TLS
+                            )
+                            print(f"MQTT: TLS enabled (using system CA certs)")
+                        
+                        if mqtt_tls_insecure:
+                            client.tls_insecure_set(True)
+                            print("MQTT: TLS insecure mode enabled (certificate validation disabled)")
+                    except Exception as tls_err:
+                        print(f"MQTT: TLS configuration error: {tls_err}")
+                        print("MQTT: Continuing without TLS (insecure)")
+                
+                # Set callbacks
+                client.on_connect = _on_connect
+                client.on_message = _on_message
+                
+                # Add disconnect callback to handle reconnection
+                def _on_disconnect(client, userdata, reason_code, properties):
+                    nonlocal mqtt_connected
+                    mqtt_connected = False
+                    if reason_code != 0:
+                        print(f"MQTT: Unexpected disconnection (rc={reason_code})")
+                
+                client.on_disconnect = _on_disconnect
+                
+                # Enable automatic reconnection
+                client.reconnect_delay_set(min_delay=1, max_delay=120)
+                
+                print(f"MQTT: Attempting to connect to {mqtt_host}:{mqtt_port} ({'TLS' if mqtt_use_tls else 'plain'}) (attempt {retry_count + 1}/{max_retries})")
+                
+                # Use async connection
                 try:
-                    if mqtt_ca_certs and os.path.exists(mqtt_ca_certs):
-                        # Use CA certificate for validation
-                        client.tls_set(
-                            ca_certs=mqtt_ca_certs,
-                            certfile=mqtt_certfile if (mqtt_certfile and os.path.exists(mqtt_certfile)) else None,
-                            keyfile=mqtt_keyfile if (mqtt_keyfile and os.path.exists(mqtt_keyfile)) else None,
-                            cert_reqs=ssl.CERT_REQUIRED if not mqtt_tls_insecure else ssl.CERT_NONE,
-                            tls_version=ssl.PROTOCOL_TLS
-                        )
-                        print(f"MQTT: TLS enabled with CA cert: {mqtt_ca_certs}")
-                    else:
-                        # Use system CA certificates (default)
-                        client.tls_set(
-                            certfile=mqtt_certfile if (mqtt_certfile and os.path.exists(mqtt_certfile)) else None,
-                            keyfile=mqtt_keyfile if (mqtt_keyfile and os.path.exists(mqtt_keyfile)) else None,
-                            cert_reqs=ssl.CERT_NONE if mqtt_tls_insecure else ssl.CERT_REQUIRED,
-                            tls_version=ssl.PROTOCOL_TLS
-                        )
-                        print(f"MQTT: TLS enabled (using system CA certs)")
+                    client.connect_async(mqtt_host, mqtt_port, keepalive=60)
+                    client.loop_start()
                     
-                    if mqtt_tls_insecure:
-                        client.tls_insecure_set(True)
-                        print("MQTT: TLS insecure mode enabled (certificate validation disabled)")
-                except Exception as tls_err:
-                    print(f"MQTT: TLS configuration error: {tls_err}")
-                    print("MQTT: Continuing without TLS (insecure)")
-            
-            client.on_connect = _on_connect
-            client.on_message = _on_message
-            client.connect(mqtt_host, mqtt_port, keepalive=60)
-            print(f"MQTT: Connecting to {mqtt_host}:{mqtt_port} ({'TLS' if mqtt_use_tls else 'plain'})")
-            client.loop_forever()
-        except Exception as e:
-            print(f"MQTT thread exit: {e}")
-            import traceback
-            traceback.print_exc()
+                    # Wait up to 5 seconds to see if connection succeeds
+                    for _ in range(10):  # Check 10 times over 5 seconds
+                        time.sleep(0.5)
+                        if mqtt_connected:
+                            print(f"MQTT: Successfully connected to {mqtt_host}:{mqtt_port}")
+                            # Keep the loop running - it will handle reconnections automatically
+                            while True:
+                                time.sleep(10)
+                                # If we lose connection and it doesn't reconnect, break to retry
+                                if not mqtt_connected:
+                                    # Give it some time to reconnect automatically
+                                    time.sleep(5)
+                                    if not mqtt_connected:
+                                        print("MQTT: Connection lost and auto-reconnect failed, will retry...")
+                                        break
+                            break
+                    else:
+                        # Connection failed within timeout
+                        client.loop_stop()
+                        client.disconnect()
+                        raise ConnectionError("Connection attempt timed out")
+                        
+                except Exception as conn_err:
+                    print(f"MQTT: Connection error: {conn_err}")
+                    try:
+                        client.loop_stop()
+                        client.disconnect()
+                    except:
+                        pass
+                    raise
+                    
+            except Exception as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    # Exponential backoff: delay increases with each retry
+                    delay = min(base_delay * (2 ** (retry_count - 1)), 60)  # Cap at 60 seconds
+                    print(f"MQTT: Connection failed (attempt {retry_count}/{max_retries}). Retrying in {delay} seconds...")
+                    print(f"MQTT error: {e}")
+                    time.sleep(delay)
+                else:
+                    print(f"MQTT: Max retries ({max_retries}) reached. MQTT subscriber stopped.")
+                    print(f"MQTT: Last error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    break
 
     t = threading.Thread(target=_run, name='mqtt-key-subscriber', daemon=True)
     t.start()
@@ -845,6 +927,7 @@ def api_provision_request():
     try:
         import paho.mqtt.publish as publish
         publish_kwargs = _get_mqtt_publish_kwargs()
+        print(f"[Provision Request] MQTT publish kwargs: {publish_kwargs}")
         publish.single(topic, payload, **publish_kwargs)
         print(f"[Provision Request] ✅ MQTT message sent successfully")
         try:
@@ -853,8 +936,11 @@ def api_provision_request():
             pass
         return jsonify({"status": "sent", "topic": topic, "user_id": str(user_id)})
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
         print(f"[Provision Request] ❌ MQTT publish failed: {e}")
-        return jsonify({"error": f"MQTT publish failed: {e}"}), 500
+        print(f"[Provision Request] Error details:\n{error_details}")
+        return jsonify({"error": f"MQTT publish failed: {str(e)}"}), 500
 
 def _within_range(value, min_val, max_val):
     if value is None:
@@ -1240,6 +1326,11 @@ def submit_data():
 @app.route('/favicon.ico')
 def favicon():
     """Handle favicon requests to prevent 500 errors."""
+    return '', 204  # No Content
+
+@app.route('/static/favicon.ico')
+def static_favicon():
+    """Handle static favicon requests to prevent 404 errors."""
     return '', 204  # No Content
 
 @app.route('/')
@@ -1807,14 +1898,22 @@ def login():
             if not username or not password:
                 flash('Please enter both username and password', 'error')
             else:
-                user = get_user_by_username(username)
-                if user and check_password_hash(user.get('password', ''), password):
-                    session['user'] = user.get('username')
-                    session['user_id'] = user.get('sr_no')
-                    session.permanent = True
-                    return redirect(next_url or url_for('dashboard'))
-                else:
-                    flash('Invalid username or password', 'error')
+                try:
+                    user = get_user_by_username(username)
+                    if user and check_password_hash(user.get('password', ''), password):
+                        session['user'] = user.get('username')
+                        session['user_id'] = user.get('sr_no')
+                        session.permanent = True
+                        return redirect(next_url or url_for('dashboard'))
+                    else:
+                        flash('Invalid username or password', 'error')
+                except Exception as db_error:
+                    # Log database connection errors
+                    import sys
+                    error_msg = f"Database error during login: {str(db_error)}"
+                    print(error_msg, file=sys.stderr)
+                    sys.stderr.flush()
+                    flash('Database connection error. Please contact administrator.', 'error')
         # Render login template (for both GET and POST if login failed)
         return render_template('login.html', next=next_url)
     except Exception as e:
@@ -2507,6 +2606,11 @@ def sensors_register():
     # GET request - show form
     try:
         sensor_types = list_sensor_types() or []
+        import sys
+        print(f"DEBUG: sensors_register GET - Found {len(sensor_types)} sensor types", file=sys.stderr)
+        if sensor_types:
+            print(f"DEBUG: Sensor types: {[t.get('type_name', 'NO_NAME') if isinstance(t, dict) else getattr(t, 'type_name', 'NO_NAME') for t in sensor_types[:3]]}", file=sys.stderr)
+        sys.stderr.flush()
         return render_template('sensors_register.html', sensor_types=sensor_types)
     except Exception as e:
         import traceback
@@ -2837,6 +2941,92 @@ def api_key_upload_fetch():
         print(f"ERROR: api_key_upload_fetch - {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@app.route('/test-db', methods=['GET'])
+def test_db_connection():
+    """Test database connection endpoint - useful for debugging"""
+    try:
+        import connect
+        from db import get_pool, _get_connection, _return_connection, _get_cursor
+        
+        result = {
+            "status": "testing",
+            "config": {
+                "host": connect.DB_HOST,
+                "port": connect.DB_PORT,
+                "user": connect.DB_USER,
+                "database": connect.DB_NAME,
+                "password_set": bool(connect.DB_PASSWORD)
+            },
+            "tests": {}
+        }
+        
+        # Test 1: Connection pool
+        try:
+            pool = get_pool()
+            if pool:
+                result["tests"]["connection_pool"] = "✅ Created successfully"
+            else:
+                result["tests"]["connection_pool"] = "⚠️ Pool is None (using connect.py)"
+        except Exception as e:
+            result["tests"]["connection_pool"] = f"❌ Failed: {str(e)}"
+        
+        # Test 2: Direct connection
+        try:
+            conn = _get_connection(pool) if pool else connect.get_connection()
+            cursor = _get_cursor(conn, dictionary=True) if pool else conn.cursor(dictionary=True)
+            cursor.execute("SELECT DATABASE() as db, VERSION() as version, NOW() as current_time")
+            db_info = cursor.fetchone()
+            cursor.close()
+            _return_connection(pool, conn) if pool else connect.close_connection(conn)
+            
+            result["tests"]["direct_connection"] = "✅ Connected successfully"
+            result["database_info"] = {
+                "database": db_info.get('db') if isinstance(db_info, dict) else db_info[0],
+                "version": db_info.get('version') if isinstance(db_info, dict) else db_info[1],
+                "server_time": str(db_info.get('current_time') if isinstance(db_info, dict) else db_info[2])
+            }
+        except Exception as e:
+            result["tests"]["direct_connection"] = f"❌ Failed: {str(e)}"
+        
+        # Test 3: Query execution
+        try:
+            conn = _get_connection(pool) if pool else connect.get_connection()
+            cursor = _get_cursor(conn, dictionary=True) if pool else conn.cursor(dictionary=True)
+            cursor.execute("SHOW TABLES")
+            tables = cursor.fetchall()
+            cursor.close()
+            _return_connection(pool, conn) if pool else connect.close_connection(conn)
+            
+            table_names = [list(t.values())[0] if isinstance(t, dict) else t[0] for t in tables]
+            result["tests"]["query_execution"] = f"✅ Success - Found {len(table_names)} tables"
+            result["tables"] = table_names[:10]  # Show first 10 tables
+        except Exception as e:
+            result["tests"]["query_execution"] = f"❌ Failed: {str(e)}"
+        
+        # Test 4: Using connect.py test function
+        try:
+            if connect.test_connection():
+                result["tests"]["connect_test"] = "✅ connect.test_connection() passed"
+            else:
+                result["tests"]["connect_test"] = "❌ connect.test_connection() failed"
+        except Exception as e:
+            result["tests"]["connect_test"] = f"❌ Error: {str(e)}"
+        
+        # Determine overall status
+        all_passed = all("✅" in str(v) for v in result["tests"].values())
+        result["status"] = "✅ All tests passed!" if all_passed else "⚠️ Some tests failed"
+        
+        return jsonify(result), 200 if all_passed else 500
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "status": "❌ Error",
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
 
 if __name__ == '__main__':
     # Start MQTT key subscriber if configured

@@ -4,21 +4,12 @@
     <title>IoT Dashboard - Water Monitor</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
-    <script>
-        // Apply theme immediately before page renders to prevent white flash
-        (function() {
-            const theme = localStorage.getItem('theme') || 'light';
-            document.documentElement.setAttribute('data-theme', theme);
-        })();
-    </script>
     <style>
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
-            background: var(--bg-primary);
+            background: #f4f8fb;
             margin: 0;
             padding: 0;
-            color: var(--text-primary);
-            transition: background-color 0.3s ease, color 0.3s ease;
         }
         .container {
             max-width: 1400px;
@@ -26,22 +17,19 @@
             padding: 20px;
         }
         h1 {
-            color: var(--text-primary);
+            color: #2a4d69;
             margin-bottom: 8px;
-            transition: color 0.3s ease;
         }
         .sub {
-            color: var(--text-secondary);
+            color: #587a96;
             margin-bottom: 20px;
-            transition: color 0.3s ease;
         }
         .controls {
-            background: var(--bg-secondary);
+            background: #fff;
             padding: 20px;
             border-radius: 8px;
-            box-shadow: var(--shadow);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
-            transition: background-color 0.3s ease, box-shadow 0.3s ease;
         }
         .location-selector, .time-range-selector {
             display: flex;
@@ -50,18 +38,14 @@
         }
         .location-selector label, .time-range-selector label {
             font-weight: 600;
-            color: var(--text-primary);
-            transition: color 0.3s ease;
+            color: #2a4d69;
         }
         .location-selector select, .time-range-selector select {
             padding: 8px 12px;
-            border: 1px solid var(--border-input);
+            border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 14px;
             min-width: 200px;
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
         }
         #customRangeContainer {
             display: flex;
@@ -70,12 +54,9 @@
         }
         #customRangeContainer input[type="datetime-local"] {
             padding: 8px 12px;
-            border: 1px solid var(--border-input);
+            border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 14px;
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
         }
         #applyCustomRange {
             padding: 8px 16px;
@@ -84,7 +65,6 @@
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            transition: background-color 0.3s ease;
         }
         #applyCustomRange:hover {
             background: #1e3b52;
@@ -92,13 +72,12 @@
         #liveStatusBadge {
             margin-bottom: 20px;
             padding: 12px 20px;
-            background: var(--bg-secondary);
+            background: #fff;
             border-radius: 8px;
-            box-shadow: var(--shadow);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             display: flex;
             align-items: center;
             gap: 10px;
-            transition: background-color 0.3s ease, box-shadow 0.3s ease;
         }
         #statusIndicator {
             width: 12px;
@@ -119,16 +98,14 @@
         }
         #statusText {
             font-weight: 600;
-            color: var(--text-tertiary);
-            transition: color 0.3s ease;
+            color: #374151;
         }
         .summary-table {
-            background: var(--bg-secondary);
+            background: #fff;
             border-radius: 8px;
-            box-shadow: var(--shadow);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
             overflow-x: auto;
-            transition: background-color 0.3s ease, box-shadow 0.3s ease;
         }
         table {
             width: 100%;
@@ -137,19 +114,15 @@
         th, td {
             padding: 12px;
             text-align: left;
-            border-bottom: 1px solid var(--border-light);
-            color: var(--text-primary);
-            transition: border-color 0.3s ease, color 0.3s ease;
+            border-bottom: 1px solid #eee;
         }
         th {
-            background: var(--bg-tertiary);
+            background: #f8f9fa;
             font-weight: 600;
-            color: var(--text-primary);
-            transition: background-color 0.3s ease, color 0.3s ease;
+            color: #2a4d69;
         }
         tr:hover {
-            background: var(--bg-tertiary);
-            transition: background-color 0.3s ease;
+            background: #f8f9fa;
         }
         .status-safe {
             color: #22c55e;
@@ -160,18 +133,16 @@
             font-weight: 600;
         }
         .chart-container {
-            background: var(--bg-secondary);
+            background: #fff;
             padding: 20px;
             border-radius: 8px;
-            box-shadow: var(--shadow);
-            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .chart-title {
-            color: var(--text-primary);
+            color: #2a4d69;
             font-weight: 700;
             margin-bottom: 16px;
             font-size: 1.2rem;
-            transition: color 0.3s ease;
         }
         .chart-wrap {
             height: 300px;
@@ -187,111 +158,15 @@
                 grid-template-columns: 1fr;
             }
         }
-        @media (max-width: 900px) {
-            .container {
-                padding: 16px;
-                margin: 16px auto;
-            }
-            .controls {
-                padding: 16px;
-            }
-            .location-selector, .time-range-selector {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 8px;
-                width: 100%;
-            }
-            .location-selector select, .time-range-selector select {
-                width: 100%;
-                min-width: unset;
-            }
-            #customRangeContainer {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 8px;
-                width: 100%;
-            }
-            #customRangeContainer input[type="datetime-local"] {
-                width: 100%;
-            }
-            #applyCustomRange {
-                width: 100%;
-            }
-            .summary-table {
-                overflow-x: auto;
-                -webkit-overflow-scrolling: touch;
-            }
-            table {
-                min-width: 600px;
-            }
-            th, td {
-                padding: 10px 8px;
-                font-size: 0.9rem;
-            }
-            h1 {
-                font-size: 1.5rem;
-            }
-            .sub {
-                font-size: 0.9rem;
-            }
-        }
-        @media (max-width: 600px) {
-            .container {
-                padding: 12px;
-                margin: 12px auto;
-            }
-            h1 {
-                font-size: 1.3rem;
-                margin-bottom: 6px;
-            }
-            .sub {
-                font-size: 0.85rem;
-                margin-bottom: 16px;
-            }
-            .controls {
-                padding: 12px;
-                margin-bottom: 16px;
-            }
-            .location-selector label, .time-range-selector label {
-                font-size: 0.9rem;
-            }
-            .location-selector select, .time-range-selector select {
-                padding: 10px;
-                font-size: 14px;
-            }
-            #liveStatusBadge {
-                padding: 10px 16px;
-                margin-bottom: 16px;
-            }
-            #statusText {
-                font-size: 0.9rem;
-            }
-            th, td {
-                padding: 8px 6px;
-                font-size: 0.85rem;
-            }
-            .chart-container {
-                padding: 16px;
-            }
-            .chart-title {
-                font-size: 1rem;
-                margin-bottom: 12px;
-            }
-            .chart-wrap {
-                height: 250px;
-            }
-        }
         .loading {
             text-align: center;
             padding: 40px;
-            color: var(--text-secondary);
-            transition: color 0.3s ease;
+            color: #587a96;
         }
         .no-data {
             text-align: center;
             padding: 40px;
-            color: var(--text-muted);
-            transition: color 0.3s ease;
+            color: #999;
         }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -469,7 +344,7 @@ function toLocalISOString(date) {
                 statusText.style.color = '#22c55e';
             } else {
                 statusIndicator.className = 'offline';
-                statusText.textContent = 'Offline - Data may be outdated (older than 5 minutes)';
+                statusText.textContent = 'Offline - No recent data';
                 statusText.style.color = '#ef4444';
             }
         }
@@ -539,20 +414,14 @@ function toLocalISOString(date) {
                         
                         if (!data.labels || data.labels.length === 0) {
                             console.warn('No labels in response');
-                            let debugInfo = 'Row count: ' + (data.row_count || 0);
-                            debugInfo += ', Point count: ' + (data.point_count || 0);
-                            debugInfo += ', Time buckets: ' + (data.time_buckets || 0);
-                            debugInfo += ', Metrics: ' + ((data.metrics_present && data.metrics_present.length > 0) ? data.metrics_present.join(', ') : 'none');
-                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No data available (no labels)</div><div style="padding: 10px; color: #666; font-size: 12px;">' + debugInfo + '</div></div>';
+                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No data available (no labels)</div><div style="padding: 10px; color: #666;">Row count: ' + (data.row_count || 0) + ', Point count: ' + (data.point_count || 0) + '</div></div>';
                             updateLiveStatus(false);
                             return;
                         }
                         
                         if (!data.datasets || data.datasets.length === 0) {
                             console.warn('No datasets in response');
-                            let debugInfo = 'Labels: ' + (data.labels ? data.labels.length : 0);
-                            debugInfo += ', Metrics: ' + ((data.metrics_present && data.metrics_present.length > 0) ? data.metrics_present.join(', ') : 'none');
-                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No sensor data (no datasets)</div><div style="padding: 10px; color: #666; font-size: 12px;">' + debugInfo + '</div></div>';
+                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No sensor data (no datasets)</div><div style="padding: 10px; color: #666;">Labels: ' + data.labels.length + '</div></div>';
                             updateLiveStatus(false);
                             return;
                         }
@@ -650,10 +519,6 @@ if (data.safety_status && data.safety_status.length > 0) {
                     optimizedLabels
                 );
 
-                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-                const textColor = isDark ? '#cbd5e1' : '#374151';
-                const gridColor = isDark ? '#475569' : '#e5e7eb';
-
                 chartInstances['safety'] = new Chart(safetyCtx, {
                     type: 'bar',
                     data: {
@@ -678,11 +543,6 @@ if (data.safety_status && data.safety_status.length > 0) {
                         plugins: {
                             legend: { display: false },
                             tooltip: {
-                                backgroundColor: isDark ? 'rgba(30, 41, 59, 0.9)' : 'rgba(255, 255, 255, 0.9)',
-                                titleColor: textColor,
-                                bodyColor: textColor,
-                                borderColor: gridColor,
-                                borderWidth: 1,
                                 callbacks: {
                                     label: function(context) {
                                         return context.raw === 1 ? 'Status: Safe' : 'Status: Unsafe';
@@ -696,23 +556,14 @@ if (data.safety_status && data.safety_status.length > 0) {
                                     maxRotation: 45,
                                     autoSkip: true,
                                     maxTicksLimit: 15,
-                                    font: { size: 10 },
-                                    color: textColor
+                                    font: { size: 10 }
                                 },
-                                title: { 
-                                    display: true, 
-                                    text: 'Date',
-                                    color: textColor
-                                },
-                                grid: {
-                                    color: gridColor
-                                }
+                                title: { display: true, text: 'Date' }
                             },
                             y: {
                                 ticks: {
                                     font: { size: 10 },
                                     stepSize: 1,
-                                    color: textColor,
                                     callback: function(value) {
                                         if (value === 1) return 'Safe';
                                         if (value === 0) return 'Unsafe';
@@ -721,14 +572,7 @@ if (data.safety_status && data.safety_status.length > 0) {
                                 },
                                 min: 0,
                                 max: 1,
-                                title: { 
-                                    display: true, 
-                                    text: 'Safety Status',
-                                    color: textColor
-                                },
-                                grid: {
-                                    color: gridColor
-                                }
+                                title: { display: true, text: 'Safety Status' }
                             }
                         },
                         animation: false
@@ -756,28 +600,12 @@ if (data.safety_status && data.safety_status.length > 0) {
         }
 
         function getChartOptions(yAxisTitle) {
-            const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-            const textColor = isDark ? '#cbd5e1' : '#374151';
-            const gridColor = isDark ? '#475569' : '#e5e7eb';
-            
             return {
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
-                    legend: { 
-                        display: true, 
-                        position: 'top',
-                        labels: { color: textColor }
-                    },
-                    tooltip: { 
-                        intersect: false, 
-                        mode: 'index',
-                        backgroundColor: isDark ? 'rgba(30, 41, 59, 0.9)' : 'rgba(255, 255, 255, 0.9)',
-                        titleColor: textColor,
-                        bodyColor: textColor,
-                        borderColor: gridColor,
-                        borderWidth: 1
-                    }
+                    legend: { display: true, position: 'top' },
+                    tooltip: { intersect: false, mode: 'index' }
                 },
                 scales: {
                     x: {
@@ -785,87 +613,20 @@ if (data.safety_status && data.safety_status.length > 0) {
                             maxRotation: 45,
                             autoSkip: true,
                             maxTicksLimit: 15,
-                            font: { size: 10 },
-                            color: textColor
+                            font: { size: 10 }
                         },
-                        title: { 
-                            display: true, 
-                            text: 'Date',
-                            color: textColor
-                        },
-                        grid: {
-                            color: gridColor
-                        }
+                        title: { display: true, text: 'Date' }
                     },
                     y: {
                         beginAtZero: false,
-                        title: { 
-                            display: true, 
-                            text: yAxisTitle,
-                            color: textColor
-                        },
-                        ticks: { 
-                            font: { size: 10 },
-                            color: textColor
-                        },
-                        grid: {
-                            color: gridColor
-                        }
+                        title: { display: true, text: yAxisTitle },
+                        ticks: { font: { size: 10 } }
                     }
                 },
                 animation: false,
                 interaction: { intersect: false, mode: 'index' }
             };
         }
-
-        // Function to update charts when theme changes
-        function updateChartsTheme() {
-            Object.values(chartInstances).forEach(chart => {
-                if (chart && chart.options) {
-                    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-                    const textColor = isDark ? '#cbd5e1' : '#374151';
-                    const gridColor = isDark ? '#475569' : '#e5e7eb';
-                    
-                    if (chart.options.scales) {
-                        if (chart.options.scales.x) {
-                            chart.options.scales.x.ticks.color = textColor;
-                            chart.options.scales.x.title.color = textColor;
-                            chart.options.scales.x.grid.color = gridColor;
-                        }
-                        if (chart.options.scales.y) {
-                            chart.options.scales.y.ticks.color = textColor;
-                            chart.options.scales.y.title.color = textColor;
-                            chart.options.scales.y.grid.color = gridColor;
-                        }
-                    }
-                    if (chart.options.plugins) {
-                        if (chart.options.plugins.legend && chart.options.plugins.legend.labels) {
-                            chart.options.plugins.legend.labels.color = textColor;
-                        }
-                        if (chart.options.plugins.tooltip) {
-                            chart.options.plugins.tooltip.backgroundColor = isDark ? 'rgba(30, 41, 59, 0.9)' : 'rgba(255, 255, 255, 0.9)';
-                            chart.options.plugins.tooltip.titleColor = textColor;
-                            chart.options.plugins.tooltip.bodyColor = textColor;
-                            chart.options.plugins.tooltip.borderColor = gridColor;
-                        }
-                    }
-                    chart.update('none');
-                }
-            });
-        }
-        
-        // Listen for theme changes
-        const observer = new MutationObserver(function(mutations) {
-            mutations.forEach(function(mutation) {
-                if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
-                    updateChartsTheme();
-                }
-            });
-        });
-        observer.observe(document.documentElement, {
-            attributes: true,
-            attributeFilter: ['data-theme']
-        });
 
         // Initialize
         if (locationSelect.value) {
@@ -878,6 +639,5 @@ if (data.safety_status && data.safety_status.length > 0) {
             loadLocationData(this.value);
         });
     </script>
-    {% include 'footer.html' ignore missing %}
 </body>
 </html>

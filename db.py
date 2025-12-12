@@ -4,6 +4,14 @@ import re
 import json
 from db_encryption import get_db_encryption
 
+# Import connect.py for MySQL connections
+try:
+    import connect
+    CONNECT_AVAILABLE = True
+except ImportError:
+    CONNECT_AVAILABLE = False
+    print("WARNING: connect.py not available, will use direct MySQL connection")
+
 # Detect database type from environment
 DB_TYPE = os.getenv('DB_TYPE', '').lower()
 
@@ -67,13 +75,24 @@ if DATABASE_URL and DB_TYPE == 'postgresql':
     DB_NAME = parsed.path.lstrip('/') or 'ilmuwanutara_e2eewater'
 else:
     # Environment-driven database configuration
-    DB_HOST = os.getenv('DB_HOST', 'localhost')
+    # Default to local MySQL for development
+    # To use remote MySQL, set environment variables: DB_HOST=ilmuwanutara.my DB_USER=ilmuwanutara_e2eewater DB_PASSWORD=e2eeWater@2025
+    DB_HOST = os.getenv('DB_HOST', '127.0.0.1' if DB_TYPE == 'mysql' else 'localhost')
     DB_PORT = int(os.getenv('DB_PORT', '5432' if DB_TYPE == 'postgresql' else '3306'))
     DB_USER = os.getenv('DB_USER', 'postgres' if DB_TYPE == 'postgresql' else 'root')
-    DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+    DB_PASSWORD = os.getenv('DB_PASSWORD', '')  # Empty password for local MySQL root by default
     DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
 
 _pool = None
+
+
+def _can_use_database(pool):
+    """Check if we can use the database (either via pool or connect.py)."""
+    if pool is not None:
+        return True
+    if DB_TYPE == 'mysql' and CONNECT_AVAILABLE:
+        return True
+    return False
 
 
 def _get_connection(pool):
@@ -81,7 +100,17 @@ def _get_connection(pool):
     if DB_TYPE == 'postgresql':
         return pool.getconn()
     else:
-        return pool.get_connection()
+        # For MySQL, use connect.py if available, otherwise use pool directly
+        if CONNECT_AVAILABLE and pool is None:
+            # If pool is None, it means we're using connect.py's pool
+            return connect.get_connection()
+        elif pool is not None:
+            return pool.get_connection()
+        else:
+            # Fallback: try to get connection from connect.py
+            if CONNECT_AVAILABLE:
+                return connect.get_connection()
+            raise Exception("No database connection available")
 
 
 def _return_connection(pool, conn):
@@ -89,7 +118,16 @@ def _return_connection(pool, conn):
     if DB_TYPE == 'postgresql':
         pool.putconn(conn)
     else:
-        conn.close()
+        # For MySQL, use connect.py if available, otherwise use pool directly
+        if CONNECT_AVAILABLE and pool is None:
+            # If pool is None, it means we're using connect.py's pool
+            connect.close_connection(conn)
+        elif pool is not None:
+            conn.close()
+        else:
+            # Fallback: try to close connection via connect.py
+            if CONNECT_AVAILABLE:
+                connect.close_connection(conn)
 
 
 def _get_cursor(conn, dictionary=False):
@@ -659,6 +697,39 @@ def _ensure_schema(conn) -> None:
 
 def get_pool():
     global _pool
+    
+    # For MySQL, use connect.py if available
+    if DB_TYPE == 'mysql' and CONNECT_AVAILABLE:
+        # Use connect.py's connection pool
+        print("DEBUG: Using connect.py for MySQL database connections")
+        print(f"DEBUG: DB_HOST={connect.DB_HOST}, DB_PORT={connect.DB_PORT}, DB_USER={connect.DB_USER}, DB_NAME={connect.DB_NAME}")
+        
+        # Test connection
+        try:
+            if connect.test_connection():
+                print("DEBUG: connect.py connection test successful")
+                # Initialize schema using connect.py connection
+                conn = connect.get_connection()
+                try:
+                    _ensure_schema(conn)
+                    print("DEBUG: Schema ensured via connect.py")
+                finally:
+                    connect.close_connection(conn)
+                # Return None to indicate we're using connect.py (not our own pool)
+                _pool = None
+                return None
+            else:
+                print("ERROR: connect.py connection test failed")
+                return None
+        except Exception as e:
+            print(f"ERROR: Failed to use connect.py: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fallback to direct MySQL connection
+            print("WARNING: Falling back to direct MySQL connection")
+            # Continue to direct MySQL connection code below
+    
+    # Existing pool validation
     if _pool is not None:
         # Test if pool is still valid
         try:
@@ -706,7 +777,7 @@ def get_pool():
             traceback.print_exc()
             return None
     else:
-        # MySQL connection
+        # MySQL connection (fallback if connect.py not available)
         try:
             _pool = pooling.MySQLConnectionPool(
                 pool_name="water_pool",
@@ -717,7 +788,7 @@ def get_pool():
                 password=DB_PASSWORD,
                 database=DB_NAME,
             )
-            print("DEBUG: MySQL connection pool created successfully")
+            print("DEBUG: MySQL connection pool created successfully (direct connection)")
             
             # Test the connection
             _conn = _get_connection(_pool)
@@ -770,7 +841,7 @@ def get_pool():
 
 def insert_reading(tds: float, ph: float, turbidity: float, safe: bool, reasons) -> None:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return
     try:
         # Encrypt sensor values before storing
@@ -804,8 +875,7 @@ def insert_reading(tds: float, ph: float, turbidity: float, safe: bool, reasons)
 
 def create_user(email: str, name: str, username: str, password_hash: str) -> bool:
     pool = get_pool()
-    if pool is None:
-        print("ERROR: Database connection pool is None in create_user()")
+    if not _can_use_database(pool):
         print("ERROR: Cannot create user - database not connected")
         return False
     try:
@@ -883,7 +953,7 @@ def create_user(email: str, name: str, username: str, password_hash: str) -> boo
 
 def get_user_by_username(username: str):
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         print("ERROR: Database connection pool is None in get_user_by_username()")
         return None
     try:
@@ -931,7 +1001,7 @@ def get_user_by_username(username: str):
 
 def get_user_by_email(email: str):
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return None
     try:
         conn = _get_connection(pool)
@@ -957,7 +1027,7 @@ def get_user_by_email(email: str):
 
 def update_user_profile(current_username: str, new_email: str, new_name: str, new_username: str) -> bool:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
@@ -985,7 +1055,7 @@ def update_user_profile(current_username: str, new_email: str, new_name: str, ne
 
 def update_user_password(username: str, password_hash: str) -> bool:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
@@ -1017,7 +1087,7 @@ def create_sensor(
     user_id: int | None = None,
 ) -> bool:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
@@ -1064,7 +1134,7 @@ def create_sensor(
 
 def get_sensor_by_device_id(device_id: str, user_id: int | None = None):
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return None
     try:
         conn = _get_connection(pool)
@@ -1100,7 +1170,7 @@ def update_sensor_by_device_id(
     max_threshold: float | None,
 ) -> bool:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
@@ -1135,7 +1205,7 @@ def update_sensor_by_device_id(
 
 def list_sensors(limit: int | None = None, user_id: int | None = None):
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return []
     try:
         conn = _get_connection(pool)
@@ -1187,7 +1257,7 @@ def list_sensors(limit: int | None = None, user_id: int | None = None):
 
 def count_active_sensors(exclude_device_id: str | None = None) -> int:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return 0
     try:
         conn = _get_connection(pool)
@@ -1217,7 +1287,7 @@ def count_active_sensors(exclude_device_id: str | None = None) -> int:
 
 def count_active_sensors_by_location(location: str | None, exclude_device_id: str | None = None, user_id: int | None = None) -> int:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return 0
     try:
         conn = _get_connection(pool)
@@ -1275,7 +1345,7 @@ def count_active_sensors_by_location(location: str | None, exclude_device_id: st
 
 def delete_sensor_by_device_id(device_id: str) -> bool:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
@@ -1298,7 +1368,7 @@ def delete_sensor_by_device_id(device_id: str) -> bool:
 def seed_sensor_types_if_empty():
     """Manually seed sensor types if the table is empty. Returns True if seeded, False otherwise."""
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         print("ERROR: Database connection pool is None in seed_sensor_types_if_empty()")
         return False
     try:
@@ -1340,7 +1410,7 @@ def seed_sensor_types_if_empty():
 
 def list_sensor_types():
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         print("ERROR: Database connection pool is None in list_sensor_types()")
         return []
     
@@ -1399,7 +1469,7 @@ def list_sensor_types():
 
 def insert_sensor_data(sensor_db_id: int, value: float, status: str = 'normal', user_id: int | None = None, device_id: str | None = None) -> bool:
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         print("ERROR: insert_sensor_data - Database pool is None")
         return False
     
@@ -1475,7 +1545,7 @@ def insert_sensor_data(sensor_db_id: int, value: float, status: str = 'normal', 
 
 def get_sensor_type_by_type(sensor_type: str):
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return None
     try:
         conn = _get_connection(pool)
@@ -1514,7 +1584,7 @@ def upsert_threshold(user_id: int, sensor_type: str, min_value, max_value, use_d
 
 def list_recent_sensor_data(limit: int = 100, user_id: int | None = None):
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return []
     try:
         conn = _get_connection(pool)
@@ -1600,7 +1670,7 @@ def get_locations_with_status(user_id: int | None = None, realtime_metrics_data:
         realtime_metrics_data: Optional dict of {metric_name: {'value': val, 'sensor_id': device_id}} from real-time data
     """
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return []
     try:
         conn = _get_connection(pool)
@@ -1920,7 +1990,7 @@ def list_recent_sensor_data_by_location(location: str, limit: int = 200, user_id
     location_filter = None if location == 'Unassigned' else location
     
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return []
     try:
         conn = _get_connection(pool)
@@ -2012,7 +2082,7 @@ def list_recent_sensor_data_by_location(location: str, limit: int = 200, user_id
 
 def list_recent_water_readings(limit: int = 200):
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return []
     try:
         conn = _get_connection(pool)
@@ -2050,7 +2120,7 @@ def list_recent_water_readings(limit: int = 200):
 def create_device_session(session_token: str, device_id: str, expires_at: datetime) -> bool:
     """Create a new device session in the database."""
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
@@ -2077,7 +2147,7 @@ def create_device_session(session_token: str, device_id: str, expires_at: dateti
 def get_device_session(session_token: str):
     """Get a device session by token."""
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return None
     try:
         conn = _get_connection(pool)
@@ -2103,7 +2173,7 @@ def get_device_session(session_token: str):
 def update_device_session(session_token: str, counter: int, expires_at: datetime) -> bool:
     """Update device session counter and expiration."""
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
@@ -2129,7 +2199,7 @@ def update_device_session(session_token: str, counter: int, expires_at: datetime
 def delete_device_session(session_token: str) -> bool:
     """Delete a device session."""
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
@@ -2153,7 +2223,7 @@ def delete_device_session(session_token: str) -> bool:
 def cleanup_expired_sessions() -> int:
     """Delete expired sessions. Returns number of deleted sessions."""
     pool = get_pool()
-    if pool is None:
+    if not _can_use_database(pool):
         return 0
     try:
         conn = _get_connection(pool)

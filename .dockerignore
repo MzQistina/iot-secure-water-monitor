@@ -1,13 +1,32 @@
 # Python
-venv/
-env/
-ENV/
-.venv/
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
 
 # IDE
 .vscode/
@@ -20,32 +39,39 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# Git
+.git/
+.gitignore
 
-# Environment variables
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Environment files
 .env
 .env.local
+.env.*.local
 
-# Documentation (optional - can include if needed)
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Documentation
 *.md
 !README.md
 
 # Test files
 test_*.py
 *_test.py
+tests/
 
-# Simulators (not needed on server)
-simulators/
-
-# User keys (will be created automatically)
-user_keys/
-
-# Git
-.git/
-.gitignore
-
-# Docker compose (not needed for single container)
-docker-compose.yml
-
-
+# Temporary files
+tmp/
+temp/
+*.tmp

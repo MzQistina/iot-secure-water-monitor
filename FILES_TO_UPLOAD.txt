@@ -1,0 +1,98 @@
+FILES AND FOLDERS TO UPLOAD VIA FILEZILLA
+==========================================
+
+✅ UPLOAD THESE FILES:
+-----------------------
+
+Core Application Files:
+- app.py
+- connect.py
+- db.py
+- passenger_wsgi.py
+- encryption_utils.py
+- validation.py
+- db_encryption.py
+- requirements.txt
+- .htaccess
+
+Optional (if your app uses them):
+- mqtt_listener.py
+
+Folders to Upload:
+- templates/          (entire folder with all HTML files)
+- static/             (entire folder if it exists - CSS, JS, images)
+
+Empty Folders to Create:
+- keys/               (create empty folder)
+- user_keys/          (create empty folder)
+- sensor_keys/        (create empty folder)
+
+
+❌ DO NOT UPLOAD:
+-----------------
+
+Test Files:
+- test_*.py
+- *_test.py
+- check_*.py
+- verify_*.py
+- compare_*.py
+- test_db_connection*.py
+- test_direct_connection.py
+- test_security.py
+- test_mysql_connection.py
+- test_device_session.py
+- test_session_establish.py
+- test_db_readings.py
+
+Utility/Script Files:
+- import_database.py
+- generate_db_key.py
+- update_sensor_public_key.py
+- phpmyadmin_setup.py
+- multi_sensor_client.py
+- raspberry_pi_client.py
+
+Simulator Files:
+- simulators/         (entire folder)
+
+Development Files:
+- venv/               (virtual environment)
+- __pycache__/        (Python cache)
+- .git/               (Git repository)
+- *.pyc               (compiled Python files)
+
+Docker Files:
+- Dockerfile
+- docker-compose.yml
+- docker-compose.production.yml
+- docker-compose.remote.yml
+- docker-start.bat
+- docker-start.sh
+- .dockerignore
+
+Documentation:
+- *.md                (all markdown files)
+- README.md
+- All guide files
+
+Configuration Files (not needed):
+- .env
+- .env.*
+- config.inc.php
+- apache-config*.conf
+- app.wsgi
+- default_thresholds.json
+
+Other:
+- flask_error.log
+- requirements_pi.txt
+- delete_device_keys.sh
+- RASPBIAN_*.txt
+
+
+SUMMARY:
+--------
+Upload: 8-9 Python files + requirements.txt + .htaccess + templates/ + static/ (if exists) + 3 empty folders
+Don't upload: Everything else (tests, docs, Docker, venv, etc.)
+
