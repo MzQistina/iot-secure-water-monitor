@@ -28,7 +28,7 @@
         }
         .container { 
             max-width: 600px; 
-            margin: 40px auto; 
+            margin: 40px auto 120px; 
             background: var(--bg-secondary); 
             border-radius: 12px; 
             box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 4px 16px rgba(0,0,0,0.1), 0 2px 8px rgba(0,0,0,0.08); 
@@ -44,8 +44,6 @@
         .row .col { flex:1; }
         .btn { background: #2a4d69; color: #fff; border: none; padding: 12px 18px; border-radius: 8px; font-size: 1rem; cursor: pointer; }
         .btn:hover { background: #1e3b52; }
-        .error { background: #ffe3e3; color: #b02a37; border: 1px solid #ffb3b3; padding: 10px 12px; border-radius: 8px; margin-bottom: 16px; }
-        .success { background: #e9f7ef; color: #1e6b3a; border: 1px solid #b7e1c1; padding: 10px 12px; border-radius: 8px; margin-bottom: 16px; }
         .topnav { display:flex; justify-content: space-between; align-items:center; margin-bottom: 10px; }
         .link { color: var(--text-primary); text-decoration:none; font-weight:600; transition: color 0.3s ease; }
         .section-title { margin-top: 20px; color: var(--text-primary); font-size:1.05rem; transition: color 0.3s ease; }
@@ -96,6 +94,10 @@
 </head>
 <body>
     {% include 'sidebar.html' %}
+    {% from 'success_alert.html' import success_alert %}
+    {% from 'error_alert.html' import error_alert %}
+    {% include 'success_alert.html' %}
+    {% include 'error_alert.html' %}
     <div class="container">
         <h1>Your Profile</h1>
         <div class="subtitle">View and update your account details</div>
@@ -103,12 +105,18 @@
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             {% for category, msg in messages %}
-                <div class="success">{{ msg }}</div>
+                {% if category == 'success' %}
+                    {{ success_alert(msg) }}
+                {% elif category == 'error' %}
+                    {{ error_alert(msg) }}
+                {% else %}
+                    <div class="{{ category }}">{{ msg }}</div>
+                {% endif %}
             {% endfor %}
         {% endif %}
         {% endwith %}
         {% if error %}
-            <div class="error">{{ error }}</div>
+            {{ error_alert(error) }}
         {% endif %}
 
         <form method="post" action="{{ url_for('profile') }}" autocomplete="off">

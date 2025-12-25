@@ -276,7 +276,6 @@ export MQTT_CA_CERTS=/etc/mosquitto/certs/ca-cert.pem
 
 - **[AFTER_TLS_MQTT_WORKING.md](AFTER_TLS_MQTT_WORKING.md)** - Windows setup guide
 - **[SELF_HOSTED_MQTT_TLS_SETUP.md](SELF_HOSTED_MQTT_TLS_SETUP.md)** - Complete TLS setup
-- **[RASPBERRY_VS_WINDOWS_SETUP.md](RASPBERRY_VS_WINDOWS_SETUP.md)** - What runs where
 
 ---
 

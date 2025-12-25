@@ -309,6 +309,8 @@ def _ensure_schema(conn) -> None:
                 public_key TEXT NULL,
                 status ENUM('active', 'inactive', 'revoked') DEFAULT 'active',
                 registered_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
+                updated_at {datetime_type} DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                key_updated_at {datetime_type} DEFAULT NULL,
                 last_seen {datetime_type} DEFAULT NULL,
                 min_threshold {double_type} NULL,
                 max_threshold {double_type} NULL,
@@ -334,6 +336,31 @@ def _ensure_schema(conn) -> None:
         except Exception:
             # Column or constraint already exists, ignore
             pass
+    # Add updated_at and key_updated_at columns if they don't exist (for existing databases) - MySQL only
+    if DB_TYPE != 'postgresql':
+        try:
+            # Check if updated_at exists
+            cur.execute(f"SHOW COLUMNS FROM {quote_char}sensors{quote_char} LIKE 'updated_at'")
+            if not cur.fetchone():
+                cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN updated_at {datetime_type} DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
+                conn.commit()
+                print("Added updated_at column to sensors table")
+            cur.fetchall()  # Consume any remaining results
+            
+            # Check if key_updated_at exists
+            cur.execute(f"SHOW COLUMNS FROM {quote_char}sensors{quote_char} LIKE 'key_updated_at'")
+            if not cur.fetchone():
+                cur.execute(f"ALTER TABLE {quote_char}sensors{quote_char} ADD COLUMN key_updated_at {datetime_type} DEFAULT NULL")
+                conn.commit()
+                print("Added key_updated_at column to sensors table")
+            cur.fetchall()  # Consume any remaining results
+        except Exception as e:
+            # Column already exists or other error, ignore
+            print(f"Note: updated_at/key_updated_at migration: {e}")
+            try:
+                cur.fetchall()
+            except:
+                pass
     # Remove old UNIQUE constraint on device_id and add composite unique constraint
     # This allows multiple users to have the same device_id, but prevents same user from having duplicate device_id
     # MySQL-specific migration code - skip for PostgreSQL
@@ -787,6 +814,8 @@ def get_pool():
                 user=DB_USER,
                 password=DB_PASSWORD,
                 database=DB_NAME,
+                connection_timeout=10,  # 10 second timeout
+                autocommit=True,
             )
             print("DEBUG: MySQL connection pool created successfully (direct connection)")
             
@@ -1168,6 +1197,7 @@ def update_sensor_by_device_id(
     public_key: str | None,
     min_threshold: float | None,
     max_threshold: float | None,
+    user_id: int | None = None,
 ) -> bool:
     pool = get_pool()
     if not _can_use_database(pool):
@@ -1175,32 +1205,159 @@ def update_sensor_by_device_id(
     try:
         conn = _get_connection(pool)
         cur = _get_cursor(conn)
-        cur.execute(
-            """
-            UPDATE sensors
-            SET location = %s,
-                status = %s,
-                public_key = %s,
-                min_threshold = %s,
-                max_threshold = %s
-            WHERE device_id = %s
-            """,
-            (
-                location,
-                status,
-                public_key,
-                None if min_threshold is None else float(min_threshold),
-                None if max_threshold is None else float(max_threshold),
-                device_id,
-            ),
-        )
+        
+        # Debug logging
+        import sys
+        print(f"DEBUG: update_sensor_by_device_id - device_id='{device_id}', user_id={user_id}", file=sys.stderr)
+        print(f"DEBUG: update_sensor_by_device_id - location={location}, status={status}, min_threshold={min_threshold}, max_threshold={max_threshold}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        # Check if public_key is being updated (to track key_updated_at)
+        # Get current public_key to compare
+        check_cur = _get_cursor(conn, dictionary=True)
+        if user_id is not None:
+            check_cur.execute(
+                "SELECT public_key FROM sensors WHERE device_id = %s AND user_id = %s",
+                (device_id, int(user_id))
+            )
+        else:
+            check_cur.execute(
+                "SELECT public_key FROM sensors WHERE device_id = %s",
+                (device_id,)
+            )
+        current_row = check_cur.fetchone()
+        current_public_key = current_row.get('public_key') if current_row else None
+        check_cur.close()
+        
+        # Determine if key is being updated
+        key_changed = (public_key is not None and public_key != current_public_key)
+        
+        # Include user_id in WHERE clause if provided (important for multi-user scenarios)
+        if user_id is not None:
+            if key_changed:
+                # Key is being updated - set key_updated_at
+                cur.execute(
+                    """
+                    UPDATE sensors
+                    SET location = %s,
+                        status = %s,
+                        public_key = %s,
+                        min_threshold = %s,
+                        max_threshold = %s,
+                        updated_at = NOW(),
+                        key_updated_at = NOW()
+                    WHERE device_id = %s AND user_id = %s
+                    """,
+                    (
+                        location,
+                        status,
+                        public_key,
+                        None if min_threshold is None else float(min_threshold),
+                        None if max_threshold is None else float(max_threshold),
+                        device_id,
+                        int(user_id),
+                    ),
+                )
+            else:
+                # No key change - just update other fields
+                cur.execute(
+                    """
+                    UPDATE sensors
+                    SET location = %s,
+                        status = %s,
+                        public_key = %s,
+                        min_threshold = %s,
+                        max_threshold = %s,
+                        updated_at = NOW()
+                    WHERE device_id = %s AND user_id = %s
+                    """,
+                    (
+                        location,
+                        status,
+                        public_key,
+                        None if min_threshold is None else float(min_threshold),
+                        None if max_threshold is None else float(max_threshold),
+                        device_id,
+                        int(user_id),
+                    ),
+                )
+        else:
+            if key_changed:
+                # Key is being updated - set key_updated_at
+                cur.execute(
+                    """
+                    UPDATE sensors
+                    SET location = %s,
+                        status = %s,
+                        public_key = %s,
+                        min_threshold = %s,
+                        max_threshold = %s,
+                        updated_at = NOW(),
+                        key_updated_at = NOW()
+                    WHERE device_id = %s
+                    """,
+                    (
+                        location,
+                        status,
+                        public_key,
+                        None if min_threshold is None else float(min_threshold),
+                        None if max_threshold is None else float(max_threshold),
+                        device_id,
+                    ),
+                )
+            else:
+                # No key change - just update other fields
+                cur.execute(
+                    """
+                    UPDATE sensors
+                    SET location = %s,
+                        status = %s,
+                        public_key = %s,
+                        min_threshold = %s,
+                        max_threshold = %s,
+                        updated_at = NOW()
+                WHERE device_id = %s
+                """,
+                (
+                    location,
+                    status,
+                    public_key,
+                    None if min_threshold is None else float(min_threshold),
+                    None if max_threshold is None else float(max_threshold),
+                    device_id,
+                ),
+            )
         conn.commit()
         updated = cur.rowcount > 0
+        
+        if not updated:
+            import sys
+            # Check if sensor exists at all (for debugging) - do this before closing cursor
+            check_cur = _get_cursor(conn, dictionary=True)
+            check_cur.execute(
+                "SELECT device_id, user_id, status, location FROM sensors WHERE device_id = %s",
+                (device_id,)
+            )
+            existing = check_cur.fetchall()
+            check_cur.close()
+            
+            print(f"WARNING: update_sensor_by_device_id - No rows updated for device_id='{device_id}', user_id={user_id}", file=sys.stderr)
+            if existing:
+                print(f"WARNING: Sensor exists but user_id mismatch. Found sensors: {existing}", file=sys.stderr)
+            else:
+                print(f"WARNING: Sensor with device_id='{device_id}' not found in database", file=sys.stderr)
+            sys.stderr.flush()
+        
         cur.close()
         _return_connection(pool, conn)
+        
         return updated
     except Exception as e:
-        print(f"MySQL update_sensor_by_device_id error: {e}")
+        import sys
+        import traceback
+        print(f"ERROR: MySQL update_sensor_by_device_id error: {e}", file=sys.stderr)
+        print(f"ERROR: Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+        sys.stderr.flush()
         return False
 
 def list_sensors(limit: int | None = None, user_id: int | None = None):
@@ -2031,6 +2188,8 @@ def list_recent_sensor_data_by_location(location: str, limit: int = 200, user_id
         where_sql = " AND ".join(where_clauses)
         params.append(int(limit))
         
+        # Use INNER JOIN to ensure we only get data with valid sensor records
+        # This ensures location filtering works correctly
         query = f"""
             SELECT 
                 sd.id,
@@ -2043,7 +2202,7 @@ def list_recent_sensor_data_by_location(location: str, limit: int = 200, user_id
                 s.device_type,
                 s.location
             FROM sensor_data sd
-            LEFT JOIN sensors s ON s.id = sd.sensor_id
+            INNER JOIN sensors s ON s.id = sd.sensor_id
             WHERE {where_sql}
             ORDER BY sd.recorded_at DESC, sd.id DESC
             LIMIT %s
@@ -2118,20 +2277,38 @@ def list_recent_water_readings(limit: int = 200):
 
 # Device session management functions
 def create_device_session(session_token: str, device_id: str, expires_at: datetime) -> bool:
-    """Create a new device session in the database."""
+    """Create a new device session in the database.
+    
+    Note: expires_at can be a datetime object or seconds from now.
+    If it's an int/float, it's treated as seconds and MySQL NOW() is used.
+    """
     pool = get_pool()
     if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
         cur = _get_cursor(conn)
-        cur.execute(
-            """
-            INSERT INTO device_sessions (session_token, device_id, expires_at, counter)
-            VALUES (%s, %s, %s, 0)
-            """,
-            (session_token, device_id, expires_at),
-        )
+        
+        # If expires_at is a number, treat it as seconds and use MySQL NOW()
+        # This ensures timezone consistency with created_at/last_used_at
+        if isinstance(expires_at, (int, float)):
+            ttl_seconds = int(expires_at)
+            cur.execute(
+                """
+                INSERT INTO device_sessions (session_token, device_id, expires_at, counter)
+                VALUES (%s, %s, DATE_ADD(NOW(), INTERVAL %s SECOND), 0)
+                """,
+                (session_token, device_id, ttl_seconds),
+            )
+        else:
+            # Use provided datetime (for backward compatibility)
+            cur.execute(
+                """
+                INSERT INTO device_sessions (session_token, device_id, expires_at, counter)
+                VALUES (%s, %s, %s, 0)
+                """,
+                (session_token, device_id, expires_at),
+            )
         conn.commit()
         cur.close()
         _return_connection(pool, conn)
@@ -2171,21 +2348,40 @@ def get_device_session(session_token: str):
 
 
 def update_device_session(session_token: str, counter: int, expires_at: datetime) -> bool:
-    """Update device session counter and expiration."""
+    """Update device session counter and expiration.
+    
+    Note: expires_at can be a datetime object or seconds from now.
+    If it's an int/float, it's treated as seconds and MySQL NOW() is used.
+    """
     pool = get_pool()
     if not _can_use_database(pool):
         return False
     try:
         conn = _get_connection(pool)
         cur = _get_cursor(conn)
-        cur.execute(
-            """
-            UPDATE device_sessions
-            SET counter = %s, expires_at = %s, last_used_at = CURRENT_TIMESTAMP
-            WHERE session_token = %s
-            """,
-            (counter, expires_at, session_token),
-        )
+        
+        # If expires_at is a number, treat it as seconds and use MySQL NOW()
+        # This ensures timezone consistency with last_used_at
+        if isinstance(expires_at, (int, float)):
+            ttl_seconds = int(expires_at)
+            cur.execute(
+                """
+                UPDATE device_sessions
+                SET counter = %s, expires_at = DATE_ADD(NOW(), INTERVAL %s SECOND), last_used_at = CURRENT_TIMESTAMP
+                WHERE session_token = %s
+                """,
+                (counter, ttl_seconds, session_token),
+            )
+        else:
+            # Use provided datetime (for backward compatibility)
+            cur.execute(
+                """
+                UPDATE device_sessions
+                SET counter = %s, expires_at = %s, last_used_at = CURRENT_TIMESTAMP
+                WHERE session_token = %s
+                """,
+                (counter, expires_at, session_token),
+            )
         conn.commit()
         updated = cur.rowcount > 0
         cur.close()

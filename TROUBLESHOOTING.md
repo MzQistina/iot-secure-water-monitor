@@ -68,7 +68,7 @@ ping raspberrypi.local
 **Without it:** Server shows directory listing (files/folders)
 **With it:** Server runs your Flask app and shows your website
 
-See `APACHE_SETUP.md` or `LITESPEED_DEPLOYMENT_GUIDE.md` for WSGI configuration details.
+See `APACHE_SETUP.md` for WSGI configuration details.
 
 ## Troubleshooting Guide
 
@@ -85,9 +85,8 @@ See `APACHE_SETUP.md` or `LITESPEED_DEPLOYMENT_GUIDE.md` for WSGI configuration 
    ls -la
    ```
 
-2. If files are missing, copy them from Windows to VirtualBox:
-   - Use shared folder, SCP, or USB
-   - See `VIRTUALBOX_SIMULATION_SETUP.md` for transfer methods
+2. If files are missing, copy them from Windows to Raspberry Pi:
+   - Use SCP or other file transfer methods
 
 3. Navigate to the correct directory:
    ```bash
@@ -244,10 +243,8 @@ ls -la sensor_keys/*/sensor_private.pem
 
 ## Still Having Issues?
 
-1. **Check the setup guide:** `VIRTUALBOX_SIMULATION_SETUP.md`
-2. **Verify file checklist:** `VIRTUALBOX_FILES_CHECKLIST.txt`
-3. **Check server IP:** `FINDING_SERVER_IP.md`
-4. **Review simulation guide:** `HOW_TO_SIMULATE_READINGS.md`
+1. **Check the setup guide:** `RASPBERRY_PI_SETUP.md`
+2. **Check server IP:** `FINDING_SERVER_IP.md`
 
 
 

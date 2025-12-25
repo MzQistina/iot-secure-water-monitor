@@ -269,7 +269,6 @@ MQTT_PORT=1883
 
 - **[MQTT_TLS_SETUP.md](MQTT_TLS_SETUP.md)** - Secure MQTT with TLS/SSL
 - **[PROVISION_AGENT_GUIDE.md](PROVISION_AGENT_GUIDE.md)** - Provision agent setup
-- **[RENDER_DEPLOYMENT_GUIDE.md](RENDER_DEPLOYMENT_GUIDE.md)** - Render deployment
 
 ---
 

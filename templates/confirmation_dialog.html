@@ -1,0 +1,284 @@
+{# Confirmation Dialog Component #}
+<div id="confirmation-dialog" class="confirmation-dialog-overlay" style="display: none;">
+    <div class="confirmation-dialog">
+        <div class="confirmation-dialog-icon-wrapper" id="confirmation-dialog-icon-wrapper">
+            <svg id="confirmation-dialog-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2.875 5.75h1.917m0 0h15.333m-15.333 0v13.417a1.917 1.917 0 0 0 1.916 1.916h9.584a1.917 1.917 0 0 0 1.916-1.916V5.75m-10.541 0V3.833a1.917 1.917 0 0 1 1.916-1.916h3.834a1.917 1.917 0 0 1 1.916 1.916V5.75m-5.75 4.792v5.75m3.834-5.75v5.75" stroke="#DC2626" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </div>
+        <h2 class="confirmation-dialog-title" id="confirmation-dialog-title">Are you sure?</h2>
+        <p class="confirmation-dialog-message" id="confirmation-dialog-message">
+            Do you really want to continue? This action cannot be undone.
+        </p>
+        <div class="confirmation-dialog-actions">
+            <button type="button" class="confirmation-dialog-cancel" id="confirmation-dialog-cancel">Cancel</button>
+            <button type="button" class="confirmation-dialog-confirm" id="confirmation-dialog-confirm">Confirm</button>
+        </div>
+    </div>
+</div>
+
+{# Confirmation Dialog Styles #}
+<style>
+.confirmation-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    backdrop-filter: blur(2px);
+}
+
+.confirmation-dialog {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: white;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+    padding: 24px 20px;
+    width: 370px;
+    max-width: 90vw;
+    border: 1px solid #e5e7eb;
+}
+
+.confirmation-dialog-icon-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: #fee2e2;
+    border-radius: 50%;
+    margin-bottom: 16px;
+}
+
+.confirmation-dialog-title {
+    margin: 0;
+    color: #111827;
+    font-weight: 600;
+    font-size: 1.25rem;
+    margin-top: 16px;
+    text-align: center;
+}
+
+.confirmation-dialog-message {
+    margin: 8px 0 0 0;
+    font-size: 0.875rem;
+    color: #4b5563;
+    text-align: center;
+    line-height: 1.5;
+}
+
+.confirmation-dialog-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 20px;
+    width: 100%;
+}
+
+.confirmation-dialog-cancel,
+.confirmation-dialog-confirm {
+    width: 100%;
+    max-width: 144px;
+    height: 40px;
+    border-radius: 6px;
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: none;
+}
+
+.confirmation-dialog-cancel {
+    border: 1px solid #d1d5db;
+    background: white;
+    color: #4b5563;
+}
+
+.confirmation-dialog-cancel:hover {
+    background: #f9fafb;
+}
+
+.confirmation-dialog-cancel:active {
+    transform: scale(0.95);
+}
+
+.confirmation-dialog-confirm {
+    background: #dc2626;
+    color: white;
+}
+
+.confirmation-dialog-confirm:hover {
+    background: #b91c1c;
+}
+
+.confirmation-dialog-confirm:active {
+    transform: scale(0.95);
+}
+
+/* Dark mode support */
+[data-theme="dark"] .confirmation-dialog {
+    background: #1e293b;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .confirmation-dialog-title {
+    color: #f1f5f9;
+}
+
+[data-theme="dark"] .confirmation-dialog-message {
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .confirmation-dialog-cancel {
+    border-color: #475569;
+    background: #1e293b;
+    color: #cbd5e1;
+}
+
+[data-theme="dark"] .confirmation-dialog-cancel:hover {
+    background: #334155;
+}
+
+/* Responsive */
+@media (min-width: 768px) {
+    .confirmation-dialog {
+        width: 460px;
+    }
+}
+
+@media (max-width: 480px) {
+    .confirmation-dialog {
+        width: calc(100vw - 32px);
+        padding: 20px 16px;
+    }
+    
+    .confirmation-dialog-title {
+        font-size: 1.1rem;
+    }
+    
+    .confirmation-dialog-message {
+        font-size: 0.8rem;
+    }
+    
+    .confirmation-dialog-actions {
+        flex-direction: column;
+        gap: 12px;
+    }
+    
+    .confirmation-dialog-cancel,
+    .confirmation-dialog-confirm {
+        max-width: 100%;
+        width: 100%;
+    }
+}
+</style>
+
+{# JavaScript for Confirmation Dialog #}
+<script>
+(function() {
+    var dialog = document.getElementById('confirmation-dialog');
+    var titleEl = document.getElementById('confirmation-dialog-title');
+    var messageEl = document.getElementById('confirmation-dialog-message');
+    var cancelBtn = document.getElementById('confirmation-dialog-cancel');
+    var confirmBtn = document.getElementById('confirmation-dialog-confirm');
+    var iconWrapper = document.getElementById('confirmation-dialog-icon-wrapper');
+    var iconEl = document.getElementById('confirmation-dialog-icon');
+    
+    var currentResolve = null;
+    
+    // Icon definitions
+    var icons = {
+        'delete': '<path d="M2.875 5.75h1.917m0 0h15.333m-15.333 0v13.417a1.917 1.917 0 0 0 1.916 1.916h9.584a1.917 1.917 0 0 0 1.916-1.916V5.75m-10.541 0V3.833a1.917 1.917 0 0 1 1.916-1.916h3.834a1.917 1.917 0 0 1 1.916 1.916V5.75m-5.75 4.792v5.75m3.834-5.75v5.75" stroke="#DC2626" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+        'logout': '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4m7 14 5-5-5-5m5 5H9" stroke="#DC2626" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>'
+    };
+    
+    // Show confirmation dialog
+    window.showConfirmation = function(title, message, confirmText, cancelText, iconType) {
+        return new Promise(function(resolve) {
+            if (!dialog || !titleEl || !messageEl || !cancelBtn || !confirmBtn) {
+                console.error('Confirmation dialog elements not found');
+                resolve(false);
+                return;
+            }
+            
+            // Set content
+            titleEl.textContent = title || 'Are you sure?';
+            messageEl.textContent = message || 'Do you really want to continue? This action cannot be undone.';
+            confirmBtn.textContent = confirmText || 'Confirm';
+            cancelBtn.textContent = cancelText || 'Cancel';
+            
+            // Set icon (default to delete/trash)
+            var iconTypeToUse = iconType || 'delete';
+            var iconPath = icons[iconTypeToUse] || icons['delete'];
+            if (iconEl) {
+                iconEl.innerHTML = iconPath;
+            }
+            
+            // Update icon wrapper background color based on type
+            if (iconWrapper) {
+                if (iconTypeToUse === 'logout') {
+                    iconWrapper.style.background = '#fef3c7'; // Yellow/amber background for logout
+                } else {
+                    iconWrapper.style.background = '#fee2e2'; // Red background for delete
+                }
+            }
+            
+            // Store resolve function
+            currentResolve = resolve;
+            
+            // Show dialog
+            dialog.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+            
+            // Focus on cancel button for accessibility
+            cancelBtn.focus();
+        });
+    };
+    
+    // Close dialog
+    function closeDialog(result) {
+        if (dialog) {
+            dialog.style.display = 'none';
+            document.body.style.overflow = '';
+        }
+        if (currentResolve) {
+            currentResolve(result);
+            currentResolve = null;
+        }
+    }
+    
+    // Event listeners
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', function() {
+            closeDialog(false);
+        });
+    }
+    
+    if (confirmBtn) {
+        confirmBtn.addEventListener('click', function() {
+            closeDialog(true);
+        });
+    }
+    
+    // Close on overlay click
+    if (dialog) {
+        dialog.addEventListener('click', function(e) {
+            if (e.target === dialog) {
+                closeDialog(false);
+            }
+        });
+    }
+    
+    // Close on Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && dialog && dialog.style.display !== 'none') {
+            closeDialog(false);
+        }
+    });
+})();
+</script>
+

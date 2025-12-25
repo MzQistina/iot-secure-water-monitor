@@ -1,0 +1,16 @@
+{
+  "timestamp": "2025-12-23T21:12:31.571388",
+  "pcap_file": "C:\\Users\\NURMIZAN QISTINA\\Desktop\\fyp\\iot-secure-water-monitor\\network.pcap",
+  "statistics": {
+    "total_packets": 57,
+    "mqtt_packets": 0,
+    "encrypted_connections": 34,
+    "unencrypted_connections": 0,
+    "unique_clients": 0,
+    "unique_topics": 0,
+    "failed_auth": 0
+  },
+  "topics": [],
+  "clients": [],
+  "findings": []
+}

@@ -27,7 +27,28 @@ services:
       FLASK_ENV: ${FLASK_ENV:-production}
       FLASK_DEBUG: ${FLASK_DEBUG:-0}
       PYTHONUNBUFFERED: 1
-      # Add any other environment variables your app needs
+      # Security
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-change-me-in-production}
+      # MQTT Configuration
+      MQTT_HOST: ${MQTT_HOST:-192.168.43.214}
+      MQTT_PORT: ${MQTT_PORT:-8883}
+      MQTT_USER: ${MQTT_USER:-water_monitor}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-e2eeWater2025}
+      MQTT_USE_TLS: ${MQTT_USE_TLS:-true}
+      MQTT_TLS_INSECURE: ${MQTT_TLS_INSECURE:-true}
+      # Optional: MQTT certificate paths (if using client certificates)
+      # MQTT_CA_CERTS: ${MQTT_CA_CERTS:-}
+      # MQTT_CERTFILE: ${MQTT_CERTFILE:-}
+      # MQTT_KEYFILE: ${MQTT_KEYFILE:-}
+      # Database encryption (optional - uses db_encryption.key file if not set)
+      # DB_ENCRYPTION_KEY: ${DB_ENCRYPTION_KEY:-}
+      # Admin user (optional)
+      # ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      # ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Device session settings (optional)
+      # REQUIRE_DEVICE_SESSION: ${REQUIRE_DEVICE_SESSION:-false}
+      # DEVICE_SESSION_TTL_SECONDS: ${DEVICE_SESSION_TTL_SECONDS:-900}
+      # DEVICE_CHALLENGE_TTL_SECONDS: ${DEVICE_CHALLENGE_TTL_SECONDS:-60}
     volumes:
       # Mount keys directory for persistence (optional)
       - ./keys:/app/keys

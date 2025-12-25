@@ -393,8 +393,6 @@ Update environment variables in your deployment platform (Render, LiteSpeed, etc
 3. Test the connection
 4. Deploy to production
 
-For deployment-specific instructions, see:
-- `RENDER_DEPLOYMENT_GUIDE.md`
-- `LITESPEED_DEPLOYMENT_GUIDE.md`
+For server configuration instructions, see:
 - `APACHE_SETUP.md`
 

@@ -18,10 +18,14 @@
         h1 { color: var(--text-primary); margin: 0 0 10px; transition: color 0.3s ease; }
         .subtitle { color: var(--text-secondary); margin-bottom: 18px; transition: color 0.3s ease; }
         .toolbar { display:flex; justify-content: space-between; align-items:center; margin-bottom: 12px; gap:10px; flex-wrap:wrap; }
-        .btn { background:#2a4d69; color:#fff; border:none; padding: 10px 14px; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block; }
+        .btn { background:#2a4d69; color:#fff; border:none; padding: 10px 14px; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block; font-size: 0.95rem; font-weight: 500; transition: background 0.2s ease; pointer-events: auto; position: relative; z-index: 1; }
         .btn:hover { background:#1e3b52; }
-        .filters { display:flex; gap:10px; align-items:center; }
-        .filters input, .filters select { padding:8px 10px; border:1px solid var(--border-input); border-radius:8px; background: var(--bg-secondary); color: var(--text-primary); transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
+        .btn:active { transform: scale(0.98); }
+        .btn:focus { outline: 2px solid #2a4d69; outline-offset: 2px; }
+        .filters { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+        .filters form { flex: 1; min-width: 0; }
+        .filters input, .filters select { padding:8px 10px; border:1px solid var(--border-input); border-radius:8px; background: var(--bg-secondary); color: var(--text-primary); transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; flex: 1; min-width: 150px; }
+        .filters button[type="submit"] { flex-shrink: 0; white-space: nowrap; }
         .table-wrap { overflow:auto; border:1px solid var(--border-color); border-radius:10px; transition: border-color 0.3s ease; }
         table { width: 100%; border-collapse: collapse; min-width:960px; }
         th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border-light); color: var(--text-primary); transition: border-color 0.3s ease, color 0.3s ease; }
@@ -69,11 +73,21 @@
                 width: 100%;
                 flex-wrap: wrap;
             }
+            .filters form {
+                width: 100%;
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
             .filters input, .filters select {
                 flex: 1;
                 min-width: 150px;
                 font-size: 16px; /* Prevents zoom on iOS */
                 height: 44px; /* Better touch target */
+            }
+            .filters button[type="submit"] {
+                min-width: 80px;
+                height: 44px;
             }
             .btn {
                 padding: 12px 16px;
@@ -112,18 +126,30 @@
                 padding: 12px;
             }
         }
+        /* Flash Message Styles */
+        .flash { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid transparent; font-weight: 500; display: flex; align-items: center; }
     </style>
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self';">
 </head>
 <body>
     {% include 'sidebar.html' %}
+    {% from 'success_alert.html' import success_alert %}
+    {% from 'error_alert.html' import error_alert %}
+    {% include 'success_alert.html' %}
+    {% include 'error_alert.html' %}
     <div class="container">
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             {% for category, msg in messages %}
-                <div class="flash {{ category }}" style="margin-bottom:12px; padding:10px 12px; border-radius:8px; border:1px solid;">
-                    {{ msg }}
-                </div>
+                {% if category == 'success' %}
+                    {{ success_alert(msg) }}
+                {% elif category == 'error' %}
+                    {{ error_alert(msg) }}
+                {% else %}
+                    <div class="flash {{ category }}" style="margin-bottom:12px; padding:10px 12px; border-radius:8px; border:1px solid;">
+                        {{ msg }}
+                    </div>
+                {% endif %}
             {% endfor %}
         {% endif %}
         {% endwith %}
@@ -133,15 +159,15 @@
                 <div class="subtitle">Registered IoT devices and key metadata</div>
             </div>
             <div class="filters">
-                <form method="get" action="{{ url_for('sensors') }}" style="display:flex; gap:10px; align-items:center;">
-                    <input type="text" name="q" value="{{ q or '' }}" placeholder="Search device, type, location...">
-                    <select name="status">
+                <form method="get" action="{{ url_for('sensors') }}" id="filter-form" style="display:flex; gap:10px; align-items:center; flex-wrap: wrap;">
+                    <input type="text" name="q" value="{{ q or '' }}" placeholder="Search device, type, location..." id="search-input">
+                    <select name="status" id="status-select">
                         <option value="">All statuses</option>
                         <option value="active" {% if status_filter=='active' %}selected{% endif %}>active</option>
                         <option value="inactive" {% if status_filter=='inactive' %}selected{% endif %}>inactive</option>
                         <option value="revoked" {% if status_filter=='revoked' %}selected{% endif %}>revoked</option>
                     </select>
-                    <button class="btn" type="submit">Filter</button>
+                    <button class="btn" type="submit" id="filter-btn">Filter</button>
                 </form>
                 <a class="btn" href="{{ url_for('sensors_register') }}">Register New Sensor</a>
             </div>
@@ -161,7 +187,8 @@
                         <th>Location</th>
                         <th class="nowrap">Threshold</th>
                         <th>Status</th>
-                        <th class="nowrap">Registered At</th>
+                        <th class="nowrap">Key Updated</th>
+                        <th class="nowrap">Last Updated</th>
                         <th class="actions">Actions</th>
                     </tr>
                 </thead>
@@ -188,12 +215,19 @@
                         <td>
                             <span class="pill {{ s.status }}">{{ s.status }}</span>
                         </td>
-                        <td class="nowrap">{{ s.registered_at or '-' }}</td>
+                        <td class="nowrap" style="font-size: 0.9em;">
+                            {% if s.key_updated_at %}
+                                {{ s.key_updated_at }}
+                            {% else %}
+                                <span style="color: #999;">Never</span>
+                            {% endif %}
+                        </td>
+                        <td class="nowrap" style="font-size: 0.9em;">{{ s.updated_at or s.registered_at or '-' }}</td>
                         
                         <td class="actions">
                             <div style="display:flex; gap:8px; justify-content:flex-end;">
-                                <button class="btn" type="button" onclick="openEditModal(this)" data-device_id="{{ s.device_id }}" data-device_type="{{ s.device_type }}" data-location="{{ s.location or '' }}" data-status="{{ s.status }}" data-fp="{{ s.public_key_fingerprint or '' }}" data-def-min="{{ s.default_min or '' }}" data-def-max="{{ s.default_max or '' }}" data-custom-min="{{ s.min_threshold or '' }}" data-custom-max="{{ s.max_threshold or '' }}">Edit</button>
-                                <form method="post" action="{{ url_for('sensors_delete') }}" onsubmit="return confirmDelete('{{ s.device_id }}')">
+                                <button class="btn" type="button" onclick="openEditModal(this)" data-device_id="{{ s.device_id }}" data-device_type="{{ s.device_type }}" data-location="{{ s.location or '' }}" data-status="{{ s.status }}" data-key-updated="{{ s.key_updated_at or '' }}" data-has-key="{{ '1' if s.has_key else '0' }}" data-fingerprint="{{ s.public_key_fingerprint or '' }}" data-def-min="{{ s.default_min or '' }}" data-def-max="{{ s.default_max or '' }}" data-custom-min="{{ s.min_threshold or '' }}" data-custom-max="{{ s.max_threshold or '' }}">Edit</button>
+                                <form method="post" action="{{ url_for('sensors_delete') }}" onsubmit="event.preventDefault(); handleDeleteSensor('{{ s.device_id }}', this);">
                                     <input type="hidden" name="device_id" value="{{ s.device_id }}">
                                     <button type="submit" class="btn" style="background:#b02a37;">Delete</button>
                                 </form>
@@ -235,16 +269,27 @@
                         </div>
                         
                         <div style="grid-column: span 2;">
-                            <label>Current Public Key</label>
-                            <div id="pk-preview" style="padding:8px; border:1px dashed var(--border-input); border-radius:8px; background: var(--bg-tertiary); color: var(--text-primary);">
-                                <span class="mono" data-field="public_key_fingerprint">No key set</span>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                                <label style="margin:0;">Public Key Management</label>
+                                <button type="button" id="edit_provision_btn" class="btn" style="padding:8px 14px; white-space:nowrap; font-size:0.9rem;">Update/Regenerate Key</button>
                             </div>
+                            <div style="padding:8px; border:1px dashed var(--border-input); border-radius:8px; background: var(--bg-tertiary); color: var(--text-primary); font-size:0.9em;">
+                                <div style="margin-bottom:4px;">Key Status: <span id="key-status-indicator" style="font-weight:600;">Checking...</span></div>
+                                <div style="margin-bottom:4px; font-family: monospace; font-size:0.85em;">
+                                    Fingerprint: <span id="key-fingerprint" style="font-weight:600;">-</span>
+                                </div>
+                                <div style="color: var(--text-secondary); font-size:0.85em;">
+                                    Last updated: <span id="key-updated-time">-</span>
+                                </div>
+                            </div>
+                            <div id="edit_provision_status" style="color:#355972; font-size:0.9rem; margin-top:6px;"></div>
                         </div>
                         <div style="grid-column: span 2; background: var(--bg-tertiary); padding:10px; border-radius:8px;">
                             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; align-items:end;">
                                 <div>
                                     <label style="margin:0; display:flex; align-items:center; gap:8px; font-weight:600; color: var(--text-primary);">
                                         <input type="checkbox" id="use_default_cb" checked onchange="toggleDefault(this)">
+                                        <input type="hidden" name="use_default_cb" id="use_default_cb_hidden" value="1">
                                         <span>Use default threshold</span>
                                     </label>
                                 </div>
@@ -278,6 +323,41 @@
         </div>
     </div>
     <script>
+        // Ensure filter form works properly
+        document.addEventListener('DOMContentLoaded', function() {
+            var filterForm = document.getElementById('filter-form');
+            var filterBtn = document.getElementById('filter-btn');
+            
+            if (filterForm && filterBtn) {
+                // Ensure button click submits form
+                filterBtn.addEventListener('click', function(e) {
+                    // Don't prevent default - let form submit naturally
+                    console.log('Filter button clicked');
+                });
+                
+                // Also allow Enter key to submit
+                var searchInput = document.getElementById('search-input');
+                var statusSelect = document.getElementById('status-select');
+                
+                if (searchInput) {
+                    searchInput.addEventListener('keypress', function(e) {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            filterForm.submit();
+                        }
+                    });
+                }
+                
+                if (statusSelect) {
+                    statusSelect.addEventListener('change', function() {
+                        // Optional: Auto-submit on status change
+                        // Uncomment the line below if you want auto-submit
+                        // filterForm.submit();
+                    });
+                }
+            }
+        });
+        
         function openEditModal(btn){
             var modal = document.getElementById('editModal');
             if (!modal) return;
@@ -293,10 +373,46 @@
             // Clear public key textarea by default
             var pk = modal.querySelector('textarea[name="public_key"]');
             if (pk){ pk.value = ''; }
-            // Fingerprint preview
-            var fp = btn.getAttribute('data-fp') || '';
-            var fpEl = modal.querySelector('[data-field="public_key_fingerprint"]');
-            if (fpEl){ fpEl.textContent = fp || 'No key set'; }
+            // Key status, fingerprint, and timestamp
+            var keyUpdated = btn.getAttribute('data-key-updated') || '';
+            var hasKey = btn.getAttribute('data-has-key') === '1';
+            var fingerprint = btn.getAttribute('data-fingerprint') || '';
+            var keyStatusEl = document.getElementById('key-status-indicator');
+            var keyFingerprintEl = document.getElementById('key-fingerprint');
+            var keyTimeEl = document.getElementById('key-updated-time');
+            
+            if (keyStatusEl) {
+                // Check if key exists (either has key_updated_at timestamp OR has_key flag)
+                if (hasKey || keyUpdated) {
+                    keyStatusEl.textContent = 'Key configured';
+                    keyStatusEl.style.color = '#22c55e'; // green
+                } else {
+                    keyStatusEl.textContent = 'No key set';
+                    keyStatusEl.style.color = '#999';
+                }
+            }
+            
+            if (keyFingerprintEl) {
+                if (fingerprint) {
+                    keyFingerprintEl.textContent = fingerprint;
+                    keyFingerprintEl.style.color = '#2a4d69';
+                } else {
+                    keyFingerprintEl.textContent = 'No key';
+                    keyFingerprintEl.style.color = '#999';
+                }
+            }
+            
+            if (keyTimeEl) {
+                // Show key_updated_at if available, otherwise show message for legacy keys
+                if (keyUpdated) {
+                    keyTimeEl.textContent = keyUpdated;
+                } else if (hasKey) {
+                    keyTimeEl.textContent = 'Before tracking (legacy)';
+                    keyTimeEl.style.color = '#666';
+                } else {
+                    keyTimeEl.textContent = 'Never';
+                }
+            }
 
             // Fill default min/max from data attributes
             var defMin = btn.getAttribute('data-def-min') || '';
@@ -328,6 +444,219 @@
                 sel.onchange = function(){ setPublicKeyRequirement(modal); };
             }
 
+            // Setup provision button handler
+            var provisionBtn = document.getElementById('edit_provision_btn');
+            var provisionStatus = document.getElementById('edit_provision_status');
+            var currentDeviceId = btn.getAttribute('data-device_id') || '';
+            
+            // Reset provision button and status when modal opens
+            if (provisionBtn){
+                provisionBtn.disabled = false;
+                provisionBtn.textContent = 'Update/Regenerate Key';
+                provisionBtn.style.opacity = '1';
+                provisionBtn.style.cursor = 'pointer';
+            }
+            if (provisionStatus){
+                provisionStatus.textContent = '';
+            }
+            
+            if (provisionBtn){
+                provisionBtn.onclick = function(){
+                    if (!currentDeviceId || currentDeviceId.trim() === ''){
+                        alert('Device ID is required');
+                        return;
+                    }
+                    
+                    // Update button state
+                    provisionBtn.disabled = true;
+                    provisionBtn.textContent = 'Updating...';
+                    provisionBtn.style.opacity = '0.7';
+                    provisionBtn.style.cursor = 'not-allowed';
+                    
+                    if (provisionStatus){
+                        provisionStatus.textContent = 'Regenerating keys on Raspberry Pi...';
+                        provisionStatus.style.color = '#355972';
+                    }
+                    
+                    // Fire a provision UPDATE request to the device via MQTT (regenerate keys)
+                    // This sends to topic: provision/{device_id}/update (NOT request)
+                    var provisionUrl = "{{ url_for('api_provision_update') }}";
+                    console.log('Sending provision UPDATE to:', provisionUrl, 'for device:', currentDeviceId);
+                    fetch(provisionUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ device_id: currentDeviceId })
+                    }).then(function(response) {
+                        if (!response.ok) {
+                            // Try to parse error message from response
+                            return response.json().then(function(errorData) {
+                                console.error('Server error response:', errorData);
+                                
+                                // Build error message - prefer error field, fallback to details
+                                var errorMsg = errorData.error || errorData.details || 'Request failed: ' + response.status;
+                                
+                                // Add hint if available (don't duplicate if already in error message)
+                                if (errorData.hint && !errorMsg.includes(errorData.hint)) {
+                                    errorMsg += '\n\n💡 ' + errorData.hint;
+                                }
+                                
+                                // Add details if different from error message
+                                if (errorData.details && errorData.details !== errorData.error && !errorMsg.includes(errorData.details)) {
+                                    errorMsg += '\n\nDetails: ' + errorData.details;
+                                }
+                                
+                                throw new Error(errorMsg);
+                            }).catch(function(parseErr) {
+                                // If JSON parsing fails, use status code
+                                console.error('Failed to parse error response:', parseErr);
+                                throw new Error('Request failed: ' + response.status);
+                            });
+                        }
+                        return response.json();
+                    }).then(function(data) {
+                        if (provisionStatus) {
+                            provisionStatus.textContent = '✅ Key regeneration request sent. Waiting for Raspberry Pi to upload new key...';
+                            provisionStatus.style.color = '#1e6b3a';
+                        }
+                        
+                        // Store initial timestamp and fingerprint for comparison
+                        var keyTimeEl = document.getElementById('key-updated-time');
+                        var keyFingerprintEl = document.getElementById('key-fingerprint');
+                        var initialTimestamp = keyTimeEl ? keyTimeEl.textContent.trim() : 'Never';
+                        var initialFingerprint = keyFingerprintEl ? keyFingerprintEl.textContent.trim() : '';
+                        var checkCount = 0;
+                        var maxChecks = 30; // Check for up to 60 seconds (30 checks * 2 seconds)
+                        
+                        // Poll for key update
+                        var checkInterval = setInterval(function(){
+                            checkCount++;
+                            fetch("{{ url_for('api_sensor_key_timestamp') }}?device_id=" + encodeURIComponent(currentDeviceId), { cache: 'no-store' })
+                                .then(res => {
+                                    if (!res.ok) return null;
+                                    return res.json();
+                                })
+                                .then(data => {
+                                    if (!data) return;
+                                    
+                                    var keyTimeEl = document.getElementById('key-updated-time');
+                                    var keyStatusEl = document.getElementById('key-status-indicator');
+                                    var keyFingerprintEl = document.getElementById('key-fingerprint');
+                                    var newTimestamp = data.key_updated_at || null;
+                                    var hasKey = data.has_key || false;
+                                    var newFingerprint = data.fingerprint || null;
+                                    
+                                    // Check if timestamp or fingerprint changed (key was updated)
+                                    var timestampChanged = false;
+                                    var fingerprintChanged = false;
+                                    
+                                    if (newTimestamp) {
+                                        // Normalize timestamps for comparison (remove extra spaces, handle different formats)
+                                        var normalizedNew = newTimestamp.trim();
+                                        var normalizedInitial = initialTimestamp.trim();
+                                        
+                                        // Check if timestamp actually changed
+                                        if (normalizedNew !== normalizedInitial && 
+                                            normalizedInitial !== 'Never' && 
+                                            normalizedInitial !== '-' &&
+                                            normalizedInitial !== 'Before tracking (legacy)') {
+                                            timestampChanged = true;
+                                        } else if (normalizedInitial === 'Never' && normalizedNew) {
+                                            // Went from "Never" to having a timestamp
+                                            timestampChanged = true;
+                                        }
+                                    }
+                                    
+                                    // Check if fingerprint changed
+                                    if (newFingerprint && newFingerprint !== initialFingerprint && initialFingerprint !== 'No key' && initialFingerprint !== '-') {
+                                        fingerprintChanged = true;
+                                    } else if (newFingerprint && (initialFingerprint === 'No key' || initialFingerprint === '-')) {
+                                        // Went from "No key" to having a fingerprint
+                                        fingerprintChanged = true;
+                                    }
+                                    
+                                    if (timestampChanged || fingerprintChanged) {
+                                        // Key was updated!
+                                        clearInterval(checkInterval);
+                                        
+                                        // Update UI
+                                        if (keyTimeEl && newTimestamp) {
+                                            keyTimeEl.textContent = newTimestamp;
+                                            keyTimeEl.style.color = '';
+                                        }
+                                        if (keyStatusEl) {
+                                            keyStatusEl.textContent = 'Key configured';
+                                            keyStatusEl.style.color = '#22c55e';
+                                        }
+                                        if (keyFingerprintEl && newFingerprint) {
+                                            keyFingerprintEl.textContent = newFingerprint;
+                                            keyFingerprintEl.style.color = '#2a4d69';
+                                        }
+                                        if (provisionStatus) {
+                                            var updateMsg = '✅ Key successfully regenerated and uploaded!';
+                                            if (fingerprintChanged && timestampChanged) {
+                                                updateMsg += ' Fingerprint and timestamp updated.';
+                                            } else if (fingerprintChanged) {
+                                                updateMsg += ' Fingerprint updated.';
+                                            } else if (timestampChanged) {
+                                                updateMsg += ' Timestamp updated.';
+                                            }
+                                            provisionStatus.textContent = updateMsg;
+                                            provisionStatus.style.color = '#1e6b3a';
+                                        }
+                                    } else if (hasKey && (initialTimestamp === 'Never' || initialTimestamp === '-')) {
+                                        // Key exists but no timestamp (legacy key) - update status
+                                        if (keyStatusEl && keyStatusEl.textContent !== 'Key configured') {
+                                            keyStatusEl.textContent = 'Key configured';
+                                            keyStatusEl.style.color = '#22c55e';
+                                        }
+                                        if (keyTimeEl && keyTimeEl.textContent === 'Never') {
+                                            keyTimeEl.textContent = 'Before tracking (legacy)';
+                                            keyTimeEl.style.color = '#666';
+                                        }
+                                    }
+                                    
+                                    // Stop checking after max attempts
+                                    if (checkCount >= maxChecks) {
+                                        clearInterval(checkInterval);
+                                        if (provisionStatus && keyTimeEl && keyTimeEl.textContent === initialTimestamp) {
+                                            provisionStatus.textContent = '⏱️ Still waiting for key upload. Check Raspberry Pi connection or refresh page manually.';
+                                            provisionStatus.style.color = '#856404';
+                                        }
+                                    }
+                                })
+                                .catch(e => {
+                                    console.error('Key timestamp check error:', e);
+                                    // Continue checking on error
+                                });
+                        }, 2000); // Check every 2 seconds
+                    }).catch(function(e){
+                        console.error('Provision request error:', e);
+                        if (provisionStatus) {
+                            // Display error message (may contain newlines for hints)
+                            var errorText = '❌ Error requesting key: ' + e.message;
+                            // Replace newlines with spaces for single-line display, or use a more structured display
+                            errorText = errorText.replace(/\n\n/g, ' | ').replace(/\n/g, ' ');
+                            provisionStatus.textContent = errorText;
+                            provisionStatus.style.color = '#b02a37';
+                            // If message is long, show in a tooltip or expandable area
+                            if (e.message.length > 100) {
+                                provisionStatus.title = e.message; // Tooltip with full message
+                            }
+                        }
+                    }).finally(function(){
+                        // Re-enable button after a delay
+                        setTimeout(function(){
+                            if (provisionBtn){
+                                provisionBtn.disabled = false;
+                                provisionBtn.textContent = 'Update/Regenerate Key';
+                                provisionBtn.style.opacity = '1';
+                                provisionBtn.style.cursor = 'pointer';
+                            }
+                        }, 2000);
+                    });
+                };
+            }
+
             // Validate on submit: require PK if activating and no existing key
             var form = modal.querySelector('form');
             if (form){
@@ -339,6 +668,17 @@
                         alert('Public key is required when setting status to active.');
                         pkArea.focus();
                         return false;
+                    }
+                    
+                    // Enable threshold fields before submit so their values are sent
+                    // (disabled fields don't submit their values)
+                    var useDefaultCb = modal.querySelector('#use_default_cb');
+                    var minInput = modal.querySelector('input[name="min_threshold"]');
+                    var maxInput = modal.querySelector('input[name="max_threshold"]');
+                    if (useDefaultCb && !useDefaultCb.checked) {
+                        // User wants custom thresholds - enable fields so values are submitted
+                        if (minInput) minInput.disabled = false;
+                        if (maxInput) maxInput.disabled = false;
                     }
                 };
             }
@@ -357,8 +697,9 @@
         function setPublicKeyRequirement(modal){
             var sel = modal.querySelector('select[name="status"]');
             var pkArea = modal.querySelector('textarea[name="public_key"]');
-            var fpText = (modal.querySelector('[data-field="public_key_fingerprint"]').textContent || '').toLowerCase();
-            var hasExistingKey = fpText && fpText !== 'no key set';
+            // Check if key exists by looking at key status indicator
+            var keyStatusEl = document.getElementById('key-status-indicator');
+            var hasExistingKey = keyStatusEl && keyStatusEl.textContent === 'Key configured';
             var isActive = sel && sel.value === 'active';
             var requirePk = isActive && !hasExistingKey;
             if (pkArea){ pkArea.required = requirePk; pkArea.style.borderColor = requirePk ? '#dc3545' : '#cfd9e3'; }
@@ -369,12 +710,77 @@
             if (!modal) return;
             var minInput = modal.querySelector('input[name="min_threshold"]');
             var maxInput = modal.querySelector('input[name="max_threshold"]');
+            var hiddenInput = document.getElementById('use_default_cb_hidden');
             var useDefault = cb && cb.checked;
             if (minInput) { minInput.disabled = useDefault; if (useDefault) minInput.value = ''; }
             if (maxInput) { maxInput.disabled = useDefault; if (useDefault) maxInput.value = ''; }
+            // Update hidden input to track checkbox state (so it's submitted even when fields are disabled)
+            if (hiddenInput) { hiddenInput.value = useDefault ? '1' : '0'; }
         }
-        function confirmDelete(deviceId){
-            return confirm('Are you sure you want to delete sensor ' + deviceId + '? This cannot be undone.');
+        async function confirmDelete(deviceId){
+            if (typeof showConfirmation === 'undefined') {
+                // Fallback to browser confirm if dialog not loaded
+                return confirm('Are you sure you want to delete sensor "' + deviceId + '"? This action cannot be undone.');
+            }
+            var confirmed = await showConfirmation(
+                'Delete Sensor',
+                'Are you sure you want to delete sensor "' + deviceId + '"? This action cannot be undone.',
+                'Delete',
+                'Cancel'
+            );
+            return confirmed;
+        }
+        
+        async function handleDeleteSensor(deviceId, formElement) {
+            var confirmed = await confirmDelete(deviceId);
+            if (confirmed && formElement) {
+                formElement.submit();
+            }
+        }
+        
+        // Function to check if provisioned key is available and auto-fill
+        // Returns true if key was found, false otherwise
+        function checkEditKeyStatus(deviceId, modal){
+            if (!deviceId || !modal) return false;
+            
+            var provisionStatus = document.getElementById('edit_provision_status');
+            var pkTextarea = modal.querySelector('textarea[name="public_key"]');
+            var keyFound = false;
+            
+            fetch("{{ url_for('api_key_upload_status') }}?device_id=" + encodeURIComponent(deviceId), { cache: 'no-store' })
+                .then(res => {
+                    if (!res.ok) return null;
+                    return res.json();
+                })
+                .then(sj => {
+                    if (sj && sj.received){
+                        // Key is available, fetch it
+                        fetch("{{ url_for('api_key_upload_fetch') }}?device_id=" + encodeURIComponent(deviceId), { cache: 'no-store' })
+                            .then(res => {
+                                if (!res.ok) return null;
+                                return res.json();
+                            })
+                            .then(fj => {
+                                var pk = (fj && fj.public_key) || '';
+                                if (pk && pkTextarea){
+                                    pkTextarea.value = pk;
+                                    keyFound = true;
+                                    if (provisionStatus) {
+                                        provisionStatus.textContent = '✅ Key received and auto-filled! You can now save changes.';
+                                        provisionStatus.style.color = '#1e6b3a';
+                                    }
+                                }
+                            })
+                            .catch(e => { 
+                                console.error('Key fetch error:', e);
+                            });
+                    }
+                })
+                .catch(e => { 
+                    console.error('Key status check error:', e);
+                });
+            
+            return keyFound;
         }
     </script>
     {% include 'footer.html' ignore missing %}

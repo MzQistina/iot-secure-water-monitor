@@ -1,11 +1,14 @@
 from flask import Flask, request, render_template, jsonify, redirect, url_for, session, flash, Response
 from werkzeug.security import generate_password_hash, check_password_hash
-from encryption_utils import decrypt_data
+from encryption_utils import decrypt_data, encrypt_data
 import base64
 import hashlib
 import json
 import os
 import secrets
+import sys
+import time
+import traceback
 from datetime import datetime, timedelta
 import threading
 import re
@@ -53,6 +56,32 @@ from db import (
 
 app = Flask(__name__)
 
+# CRITICAL: Ensure MQTT environment variables are set at startup
+# These should be set by start_flask.ps1, but set them here as a fallback
+# to ensure they're ALWAYS available
+import os
+if not os.environ.get('MQTT_USER'):
+    # Fallback: Set default values if not already set
+    # These match what start_flask.ps1 sets
+    os.environ.setdefault('MQTT_HOST', '192.168.43.214')
+    os.environ.setdefault('MQTT_USER', 'admin_flask')
+    os.environ.setdefault('MQTT_PASSWORD', 'flaske2ee25')
+    os.environ.setdefault('MQTT_PORT', '8883')
+    os.environ.setdefault('MQTT_USE_TLS', 'true')
+    os.environ.setdefault('MQTT_TLS_INSECURE', 'true')
+    print("[FLASK STARTUP] ⚠️  MQTT env vars NOT SET by PowerShell, using fallback defaults!", file=sys.stderr)
+    sys.stderr.flush()
+
+# Log environment variables at startup for debugging
+print("=" * 80, file=sys.stderr)
+print("[FLASK STARTUP] MQTT Environment Variables:", file=sys.stderr)
+print(f"  MQTT_HOST: {os.environ.get('MQTT_HOST', 'NOT SET')}", file=sys.stderr)
+print(f"  MQTT_USER: {os.environ.get('MQTT_USER', 'NOT SET')}", file=sys.stderr)
+print(f"  MQTT_PASSWORD: {'SET' if os.environ.get('MQTT_PASSWORD') else 'NOT SET'} (len: {len(os.environ.get('MQTT_PASSWORD', ''))})", file=sys.stderr)
+print(f"  MQTT_PORT: {os.environ.get('MQTT_PORT', 'NOT SET')}", file=sys.stderr)
+print("=" * 80, file=sys.stderr)
+sys.stderr.flush()
+
 # Global error handler to catch all unhandled exceptions
 import logging
 
@@ -75,9 +104,13 @@ def handle_exception(e):
     from flask import request
     from werkzeug.exceptions import NotFound
     
-    # Ignore 404 errors for favicon requests (browsers auto-request these)
-    if isinstance(e, NotFound) and ('favicon' in request.path.lower() or 'favicon.ico' in request.path.lower()):
-        return '', 204  # No Content - silently ignore missing favicon
+    # Ignore 404 errors for favicon and Chrome DevTools requests (browsers auto-request these)
+    if isinstance(e, NotFound):
+        path_lower = request.path.lower()
+        if 'favicon' in path_lower or 'favicon.ico' in path_lower:
+            return '', 204  # No Content - silently ignore missing favicon
+        if '.well-known' in path_lower or 'devtools' in path_lower:
+            return '', 204  # No Content - silently ignore Chrome DevTools requests
     
     error_msg = f"ERROR: Unhandled exception in route {request.path} [{request.method}]: {str(e)}"
     exception_type = type(e).__name__
@@ -86,17 +119,61 @@ def handle_exception(e):
     # Log to file
     app_logger.error(f"{error_msg}\nException type: {exception_type}\n{full_traceback}")
     
-    # Also print to stderr (for Apache error log)
+    # Also print to stderr (for console output - this is critical for debugging)
+    print("=" * 80, file=sys.stderr)
     print(error_msg, file=sys.stderr)
     print(f"Exception type: {exception_type}", file=sys.stderr)
     print(full_traceback, file=sys.stderr)
+    print("=" * 80, file=sys.stderr)
     sys.stderr.flush()
     
-    # In debug mode, show more details
+    # For API endpoints, always return JSON
+    if request.path.startswith('/api/'):
+        debug_mode = str(os.environ.get('FLASK_DEBUG', '0')).lower() in ('1', 'true', 'yes')
+        response_data = {
+            "error": "Internal Server Error",
+            "message": str(e),
+            "type": exception_type
+        }
+        if debug_mode:
+            response_data["traceback"] = full_traceback
+        else:
+            response_data["hint"] = "Check Apache error log or flask_error.log file for details."
+        return jsonify(response_data), 500
+    
+    # For non-API endpoints, return HTML/text
     debug_mode = str(os.environ.get('FLASK_DEBUG', '0')).lower() in ('1', 'true', 'yes')
     if debug_mode:
         return f"Internal Server Error: {str(e)}\n\n{full_traceback}", 500
     return f"Internal Server Error: {str(e)}\n\nCheck Apache error log or flask_error.log file for details.", 500
+
+# Request logging for debugging
+@app.before_request
+def log_request():
+    """Log all incoming requests for debugging."""
+    if '/provision/' in request.path:
+        app.logger.error("=" * 80)
+        app.logger.error(f"[BEFORE_REQUEST] {request.method} {request.path}")
+        app.logger.error(f"[BEFORE_REQUEST] Remote: {request.remote_addr}")
+        app.logger.error(f"[BEFORE_REQUEST] User-Agent: {request.headers.get('User-Agent', 'N/A')}")
+        app.logger.error(f"[BEFORE_REQUEST] Content-Type: {request.headers.get('Content-Type', 'N/A')}")
+        print("=" * 80, file=sys.stderr)
+        print(f"[BEFORE_REQUEST] {request.method} {request.path}", file=sys.stderr)
+        print(f"[BEFORE_REQUEST] Remote: {request.remote_addr}", file=sys.stderr)
+        print(f"[BEFORE_REQUEST] User-Agent: {request.headers.get('User-Agent', 'N/A')}", file=sys.stderr)
+        print(f"[BEFORE_REQUEST] Content-Type: {request.headers.get('Content-Type', 'N/A')}", file=sys.stderr)
+        if request.is_json:
+            try:
+                body = request.get_json(silent=True)
+                app.logger.error(f"[BEFORE_REQUEST] JSON body: {body}")
+                print(f"[BEFORE_REQUEST] JSON body: {body}", file=sys.stderr)
+            except Exception as e:
+                app.logger.error(f"[BEFORE_REQUEST] Error parsing JSON: {e}")
+                print(f"[BEFORE_REQUEST] Error parsing JSON: {e}", file=sys.stderr)
+        else:
+            app.logger.error(f"[BEFORE_REQUEST] Raw data: {request.get_data(as_text=True)[:200]}")
+            print(f"[BEFORE_REQUEST] Raw data: {request.get_data(as_text=True)[:200]}", file=sys.stderr)
+        sys.stderr.flush()
 
 # User-specific data storage: user_id -> {latest_data, latest_by_metric, latest_by_sensor}
 user_latest_data = {}  # user_id -> latest_data dict
@@ -239,28 +316,44 @@ def _get_mqtt_publish_kwargs():
     """Get MQTT publish configuration including TLS settings."""
     kwargs = {}
     
-    mqtt_host = os.environ.get('MQTT_HOST')
-    mqtt_port = int(os.environ.get('MQTT_PORT', '1883'))
-    mqtt_user = os.environ.get('MQTT_USER')
-    mqtt_password = os.environ.get('MQTT_PASSWORD')
+    # MANUAL CONFIGURATION: Set MQTT credentials directly here
+    # These values are used as fallback if environment variables are not set
+    MQTT_CONFIG = {
+        'host': '192.168.43.214',
+        'port': 8883,
+        'user': 'admin_flask',
+        'password': 'flaske2ee25',
+        'use_tls': True,
+        'tls_insecure': True
+    }
+    
+    # Try to get from environment variables first, fallback to manual config
+    mqtt_host = os.environ.get('MQTT_HOST') or MQTT_CONFIG['host']
+    mqtt_port = int(os.environ.get('MQTT_PORT') or str(MQTT_CONFIG['port']))
+    mqtt_user = os.environ.get('MQTT_USER') or MQTT_CONFIG['user']
+    mqtt_password = os.environ.get('MQTT_PASSWORD') or MQTT_CONFIG['password']
+    mqtt_use_tls = os.environ.get('MQTT_USE_TLS', 'true').lower() in ('true', '1', 'yes') if os.environ.get('MQTT_USE_TLS') else MQTT_CONFIG['use_tls']
+    mqtt_tls_insecure = os.environ.get('MQTT_TLS_INSECURE', 'true').lower() in ('true', '1', 'yes') if os.environ.get('MQTT_TLS_INSECURE') else MQTT_CONFIG['tls_insecure']
     
     kwargs['hostname'] = mqtt_host
     kwargs['port'] = mqtt_port
     
-    # Authentication
+    # Authentication - ALWAYS set if we have credentials
     if mqtt_user and mqtt_password:
         kwargs['auth'] = {'username': mqtt_user, 'password': mqtt_password}
     
     # TLS/SSL configuration
-    mqtt_use_tls = os.environ.get('MQTT_USE_TLS', 'false').lower() in ('true', '1', 'yes')
+    mqtt_use_tls = os.environ.get('MQTT_USE_TLS', 'true').lower() in ('true', '1', 'yes') if os.environ.get('MQTT_USE_TLS') else MQTT_CONFIG['use_tls']
+    mqtt_tls_insecure = os.environ.get('MQTT_TLS_INSECURE', 'true').lower() in ('true', '1', 'yes') if os.environ.get('MQTT_TLS_INSECURE') else MQTT_CONFIG['tls_insecure']
+    
     if mqtt_use_tls:
         import ssl
         mqtt_ca_certs = os.environ.get('MQTT_CA_CERTS')
         mqtt_certfile = os.environ.get('MQTT_CERTFILE')
         mqtt_keyfile = os.environ.get('MQTT_KEYFILE')
-        mqtt_tls_insecure = os.environ.get('MQTT_TLS_INSECURE', 'false').lower() in ('true', '1', 'yes')
         
         tls_config = {}
+        # Always provide ca_certs if available (even in insecure mode, it's still used)
         if mqtt_ca_certs and os.path.exists(mqtt_ca_certs):
             tls_config['ca_certs'] = mqtt_ca_certs
         if mqtt_certfile and os.path.exists(mqtt_certfile):
@@ -268,6 +361,9 @@ def _get_mqtt_publish_kwargs():
         if mqtt_keyfile and os.path.exists(mqtt_keyfile):
             tls_config['keyfile'] = mqtt_keyfile
         tls_config['tls_version'] = ssl.PROTOCOL_TLS
+        # Set cert_reqs to CERT_NONE when insecure mode is enabled
+        if mqtt_tls_insecure:
+            tls_config['cert_reqs'] = ssl.CERT_NONE
         tls_config['insecure'] = mqtt_tls_insecure
         
         kwargs['tls'] = tls_config
@@ -288,43 +384,41 @@ def notify_raspbian_key_cleanup(device_id: str, user_id: int) -> bool:
     """
     mqtt_host = os.environ.get('MQTT_HOST')
     if not mqtt_host:
+        print(f"MQTT: MQTT_HOST not configured, skipping cleanup notification for '{device_id}'")
         return False
     
     try:
-        import paho.mqtt.client as mqtt
+        import paho.mqtt.publish as publish
     except ImportError:
+        print(f"MQTT: paho-mqtt not available, skipping cleanup notification for '{device_id}'")
         return False
     
     try:
-        mqtt_port = int(os.environ.get('MQTT_PORT', '1883'))
-        mqtt_user = os.environ.get('MQTT_USER')
-        mqtt_password = os.environ.get('MQTT_PASSWORD')
-        delete_topic = os.environ.get('MQTT_DELETE_TOPIC', 'devices/delete')
-        
-        client = mqtt.Client()
-        if mqtt_user and mqtt_password:
-            client.username_pw_set(mqtt_user, mqtt_password)
-        
-        client.connect(mqtt_host, mqtt_port, 60)
+        topic_base = os.environ.get('MQTT_PROVISION_TOPIC_BASE', 'provision')
+        delete_topic = f"{topic_base}/{device_id}/delete"
         
         payload = json.dumps({
             'action': 'delete',
             'device_id': device_id,
             'user_id': str(user_id),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.utcnow().isoformat()
         })
         
-        result = client.publish(delete_topic, payload, qos=1)
-        client.disconnect()
+        print(f"[Delete Notification] Sending MQTT message:")
+        print(f"  Topic: {delete_topic}")
+        print(f"  Payload: {payload}")
         
-        if result.rc == mqtt.MQTT_ERR_SUCCESS:
-            print(f"MQTT: Sent key cleanup notification for device '{device_id}' (user: {user_id})")
-            return True
-        else:
-            print(f"MQTT: Failed to send cleanup notification (rc={result.rc})")
-            return False
+        # Use the same MQTT configuration as provision requests
+        publish_kwargs = _get_mqtt_publish_kwargs()
+        publish.single(delete_topic, payload, qos=1, **publish_kwargs)
+        
+        print(f"MQTT: ✅ Sent key cleanup notification for device '{device_id}' (user: {user_id})")
+        return True
     except Exception as e:
-        print(f"MQTT: Error sending cleanup notification: {e}")
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"MQTT: ❌ Error sending cleanup notification for '{device_id}': {e}")
+        print(f"MQTT: Error details:\n{error_details}")
         return False
 
 
@@ -362,15 +456,24 @@ def start_mqtt_key_subscriber():
         nonlocal mqtt_connected
         try:
             if reason_code == 0:
-                client.subscribe(mqtt_topic)
+                result = client.subscribe(mqtt_topic)
                 mqtt_connected = True
-                print(f"MQTT: connected rc={reason_code}; subscribed to '{mqtt_topic}'")
+                print(f"MQTT: connected rc={reason_code}; subscribed to '{mqtt_topic}' (result: {result})", file=sys.stderr)
+                sys.stderr.flush()
             else:
                 mqtt_connected = False
-                print(f"MQTT: connection failed with rc={reason_code}")
+                error_msg = f"MQTT: connection failed with rc={reason_code}"
+                if reason_code == 5:
+                    error_msg += " (Not authorized - check MQTT_USER and MQTT_PASSWORD, or ACL permissions)"
+                print(f"MQTT: {error_msg}", file=sys.stderr)
+                sys.stderr.flush()
         except Exception as e:
             mqtt_connected = False
-            print(f"MQTT subscribe error: {e}")
+            error_msg = f"MQTT subscribe error: {e}"
+            print(f"MQTT: {error_msg}", file=sys.stderr)
+            import traceback
+            print(f"MQTT: Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+            sys.stderr.flush()
 
     def _on_message(client, userdata, msg):
         try:
@@ -385,12 +488,20 @@ def start_mqtt_key_subscriber():
             except Exception:
                 pass
             pem = None
-            # Accept JSON {"device_id":"...","public_key":"PEM"}
+            user_id_from_msg = None
+            # Accept JSON {"device_id":"...","public_key":"PEM","user_id":"..."}
             if text.startswith('{'):
                 try:
                     data = json.loads(text)
                     pem = (data.get('public_key') or '').strip()
                     device_id = (data.get('device_id') or device_id or '').strip()
+                    # Extract user_id if provided
+                    user_id_raw = data.get('user_id')
+                    if user_id_raw is not None:
+                        try:
+                            user_id_from_msg = int(user_id_raw)
+                        except (ValueError, TypeError):
+                            user_id_from_msg = None
                 except Exception:
                     pem = None
             else:
@@ -401,11 +512,40 @@ def start_mqtt_key_subscriber():
             # Store as pending and update DB if sensor already exists
             pending_keys[device_id] = pem
             try:
-                srow = get_sensor_by_device_id(device_id)
+                # Use user_id if provided to get the correct sensor (important when multiple users have same device_id)
+                srow = get_sensor_by_device_id(device_id, user_id_from_msg)
             except Exception:
                 srow = None
+            
+            # Determine user_id for key storage
+            user_id_for_key = None
+            if srow:
+                sensor_user_id = srow.get('user_id')
+                user_id_for_key = user_id_from_msg if user_id_from_msg is not None else sensor_user_id
+            elif user_id_from_msg is not None:
+                user_id_for_key = user_id_from_msg
+            
+            # Save key to filesystem (user_keys directory) for E2EE encryption
+            if user_id_for_key:
+                try:
+                    if add_user_key(user_id_for_key, device_id, pem):
+                        print(f"MQTT: saved public key to user_keys/{user_id_for_key}/{device_id}_public.pem for E2EE")
+                    else:
+                        print(f"MQTT: warning - failed to save key to user_keys/{user_id_for_key}/{device_id}_public.pem")
+                except Exception as key_save_err:
+                    print(f"MQTT: error saving key to filesystem: {key_save_err}")
+                    import traceback
+                    traceback.print_exc()
+            
             if srow:
                 try:
+                    # Update sensor - use user_id if available to ensure we update the correct sensor
+                    sensor_db_id = srow.get('id')
+                    sensor_user_id = srow.get('user_id')
+                    
+                    # Use user_id_from_msg if available, otherwise use sensor_user_id from database
+                    user_id_for_update = user_id_from_msg if user_id_from_msg is not None else sensor_user_id
+                    
                     update_sensor_by_device_id(
                         device_id=device_id,
                         location=srow.get('location'),
@@ -413,12 +553,17 @@ def start_mqtt_key_subscriber():
                         public_key=pem,
                         min_threshold=srow.get('min_threshold'),
                         max_threshold=srow.get('max_threshold'),
+                        user_id=user_id_for_update,
                     )
-                    print(f"MQTT: updated public key in DB for sensor '{device_id}'")
+                    user_info = f" (user_id={user_id_for_update}, db_id={sensor_db_id})" if user_id_for_update else f" (db_id={sensor_db_id})"
+                    print(f"MQTT: updated public key in DB for sensor '{device_id}'{user_info}")
                 except Exception as e:
                     print(f"MQTT DB update error for {device_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
             else:
-                print(f"MQTT: received key for unregistered device '{device_id}' (stored pending)")
+                user_info = f" (user_id={user_id_from_msg})" if user_id_from_msg else ""
+                print(f"MQTT: received key for unregistered device '{device_id}'{user_info} (stored pending)")
         except Exception as e:
             print(f"MQTT message error: {e}")
 
@@ -472,11 +617,13 @@ def start_mqtt_key_subscriber():
                 client.on_message = _on_message
                 
                 # Add disconnect callback to handle reconnection
-                def _on_disconnect(client, userdata, reason_code, properties):
+                def _on_disconnect(client, userdata, disconnect_flags, reason_code, properties):
+                    """Callback when MQTT client disconnects (API v2)."""
                     nonlocal mqtt_connected
                     mqtt_connected = False
                     if reason_code != 0:
-                        print(f"MQTT: Unexpected disconnection (rc={reason_code})")
+                        print(f"MQTT: Unexpected disconnection (rc={reason_code})", file=sys.stderr)
+                        sys.stderr.flush()
                 
                 client.on_disconnect = _on_disconnect
                 
@@ -608,41 +755,83 @@ DEVICE_CHALLENGE_TTL_SECONDS = int(os.environ.get('DEVICE_CHALLENGE_TTL_SECONDS'
 def login_required(view_func):
     def wrapped_view(*args, **kwargs):
         import sys
-        # Check session
-        username = session.get('user')
-        user_id = session.get('user_id')
-        
-        print(f"DEBUG: login_required - username: {username}, user_id: {user_id}, path: {request.path}", file=sys.stderr)
-        sys.stderr.flush()
-        
-        if not username:
-            next_url = request.path
-            return redirect(url_for('login', next=next_url))
-        
-        # Ensure user_id is set in session (critical for user isolation)
-        if not user_id:
-            user = get_user_by_username(username)
-            if user:
-                session['user_id'] = user['sr_no']
-                session.permanent = True  # Make session persistent
-                print(f"DEBUG: login_required - Set user_id {user['sr_no']} for username {username}", file=sys.stderr)
+        import traceback
+        try:
+            # Check session
+            username = session.get('user')
+            user_id = session.get('user_id')
+            
+            # Only log for provision endpoints to reduce noise
+            if '/provision/' in request.path:
+                app.logger.error(f"[login_required] Checking auth for {request.path} - username: {username}, user_id: {user_id}")
+                print(f"[login_required] Checking auth for {request.path} - username: {username}, user_id: {user_id}", file=sys.stderr)
                 sys.stderr.flush()
-            else:
-                print(f"ERROR: login_required - User '{username}' not found in database!", file=sys.stderr)
+            
+            if not username:
+                # For API endpoints, return JSON instead of redirect
+                if request.path.startswith('/api/'):
+                    return jsonify({"error": "Authentication required", "message": "Please log in to access this resource"}), 401
+                next_url = request.path
+                return redirect(url_for('login', next=next_url))
+            
+            # Ensure user_id is set in session (critical for user isolation)
+            if not user_id:
+                user = get_user_by_username(username)
+                if user:
+                    session['user_id'] = user['sr_no']
+                    session.permanent = True  # Make session persistent
+                    if '/provision/' in request.path:
+                        print(f"[login_required] Set user_id {user['sr_no']} for username {username}", file=sys.stderr)
+                        sys.stderr.flush()
+                else:
+                    if '/provision/' in request.path:
+                        print(f"[login_required] ERROR: User '{username}' not found in database!", file=sys.stderr)
+                        sys.stderr.flush()
+                    session.clear()  # Clear invalid session
+                    # For API endpoints, return JSON instead of redirect
+                    if request.path.startswith('/api/'):
+                        return jsonify({"error": "Invalid session", "message": "User not found in database"}), 401
+                    return redirect(url_for('login'))
+            
+            # Double-check: verify user_id matches username (security check)
+            if user_id:
+                user = get_user_by_username(username)
+                if user and user['sr_no'] != user_id:
+                    if '/provision/' in request.path:
+                        print(f"[login_required] ERROR: Session mismatch! username={username}, session_user_id={user_id}, db_user_id={user['sr_no']}", file=sys.stderr)
+                        sys.stderr.flush()
+                    session.clear()  # Clear corrupted session
+                    # For API endpoints, return JSON instead of redirect
+                    if request.path.startswith('/api/'):
+                        return jsonify({"error": "Session mismatch", "message": "Session validation failed"}), 401
+                    return redirect(url_for('login'))
+            
+            # Call the actual view function
+            if '/provision/' in request.path:
+                print(f"[login_required] ✅ Auth passed, calling view function for {request.path}", file=sys.stderr)
                 sys.stderr.flush()
-                session.clear()  # Clear invalid session
-                return redirect(url_for('login'))
-        
-        # Double-check: verify user_id matches username (security check)
-        if user_id:
-            user = get_user_by_username(username)
-            if user and user['sr_no'] != user_id:
-                print(f"ERROR: login_required - Session mismatch! username={username}, session_user_id={user_id}, db_user_id={user['sr_no']}", file=sys.stderr)
-                sys.stderr.flush()
-                session.clear()  # Clear corrupted session
-                return redirect(url_for('login'))
-        
-        return view_func(*args, **kwargs)
+            try:
+                result = view_func(*args, **kwargs)
+                if '/provision/' in request.path:
+                    print(f"[login_required] ✅ View function returned successfully", file=sys.stderr)
+                    sys.stderr.flush()
+                return result
+            except Exception as view_exc:
+                if '/provision/' in request.path:
+                    print(f"[login_required] ❌ Exception in view function: {view_exc}", file=sys.stderr)
+                    print(f"[login_required] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+                    sys.stderr.flush()
+                raise  # Re-raise to be handled by global error handler
+        except Exception as e:
+            # Catch any exception in the decorator itself
+            error_msg = f"Exception in login_required decorator: {str(e)}"
+            print("=" * 80, file=sys.stderr)
+            print(f"[login_required] ❌ {error_msg}", file=sys.stderr)
+            print(f"[login_required] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+            print("=" * 80, file=sys.stderr)
+            sys.stderr.flush()
+            # Re-raise to be caught by global error handler
+            raise
     # Preserve original function name for Flask routing/debug
     wrapped_view.__name__ = getattr(view_func, '__name__', 'wrapped_view')
     return wrapped_view
@@ -711,12 +900,12 @@ def _validate_device_session(session_token: Optional[str], device_id: Optional[s
             return False, "counter_reused"
         
         # Update session with new counter and sliding expiration
-        new_expires_at = datetime.utcnow() + timedelta(seconds=DEVICE_SESSION_TTL_SECONDS)
-        update_device_session(session_token, cval, new_expires_at)
+        # Pass TTL seconds instead of datetime to ensure timezone consistency with MySQL NOW()
+        update_device_session(session_token, cval, DEVICE_SESSION_TTL_SECONDS)
     else:
         # Still update expiration on use (sliding expiration)
-        new_expires_at = datetime.utcnow() + timedelta(seconds=DEVICE_SESSION_TTL_SECONDS)
-        update_device_session(session_token, sess.get('counter', 0), new_expires_at)
+        # Pass TTL seconds instead of datetime to ensure timezone consistency with MySQL NOW()
+        update_device_session(session_token, sess.get('counter', 0), DEVICE_SESSION_TTL_SECONDS)
     
     return True, "ok"
 
@@ -732,15 +921,38 @@ def api_device_session_request():
         # Multiple users can have the same device_id, so check all active sensors
         try:
             all_sensors = list_sensors()
+            print(f"DEBUG: session/request for device_id='{device_id}' - Found {len(all_sensors or [])} total sensors in database", file=sys.stderr)
+            sys.stderr.flush()
         except Exception as db_err:
-            print(f"ERROR: Database error in session request: {db_err}")
+            print(f"ERROR: Database error in session request: {db_err}", file=sys.stderr)
             import traceback
-            traceback.print_exc()
+            traceback.print_exc(file=sys.stderr)
+            sys.stderr.flush()
             return jsonify({"error": "Database error occurred"}), 500
         
-        matching_sensors = [s for s in (all_sensors or []) if s.get('device_id', '').lower() == device_id.lower() and s.get('status') == 'active']
+        # Debug: show all sensors with matching device_id (case-insensitive)
+        device_id_lower = device_id.lower()
+        all_matching = [s for s in (all_sensors or []) if s.get('device_id', '').lower() == device_id_lower]
+        print(f"DEBUG: session/request - Found {len(all_matching)} sensors with device_id='{device_id}' (case-insensitive)", file=sys.stderr)
+        for s in all_matching:
+            print(f"DEBUG:   - device_id='{s.get('device_id')}', status='{s.get('status')}', user_id={s.get('user_id')}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        matching_sensors = [s for s in all_matching if s.get('status') == 'active']
+        print(f"DEBUG: session/request - Found {len(matching_sensors)} ACTIVE sensors with device_id='{device_id}'", file=sys.stderr)
+        sys.stderr.flush()
+        
         if not matching_sensors:
-            return jsonify({"error": "device not active or not found"}), 403
+            # Provide more helpful error message
+            if all_matching:
+                inactive_statuses = [s.get('status') for s in all_matching]
+                return jsonify({
+                    "error": f"device '{device_id}' found but not active (status: {', '.join(set(inactive_statuses))})"
+                }), 403
+            else:
+                return jsonify({
+                    "error": f"device '{device_id}' not found in database"
+                }), 403
         
         # Issue challenge - signature verification in establish will identify which sensor
         try:
@@ -784,10 +996,41 @@ def api_device_session_establish():
     if not signature_b64 or len(signature_b64) > 2000:
         return jsonify({"error": "Invalid signature."}), 400
     # Multiple users can have the same device_id, match by signature
-    all_sensors = list_sensors()
-    matching_sensors = [s for s in all_sensors if s.get('device_id', '').lower() == device_id.lower() and s.get('status') == 'active']
+    try:
+        all_sensors = list_sensors()
+        if all_sensors is None:
+            all_sensors = []
+        print(f"DEBUG: session/establish - list_sensors() returned {len(all_sensors)} total sensors", file=sys.stderr)
+    except Exception as db_err:
+        print(f"ERROR: Database error in session/establish list_sensors(): {db_err}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({"error": "Database error occurred"}), 500
+    
+    device_id_lower = device_id.lower()
+    matching_sensors = [s for s in all_sensors if s.get('device_id', '').lower() == device_id_lower and s.get('status') == 'active']
+    
     if not matching_sensors:
-        return jsonify({"error": "device not active or not found"}), 403
+        # Debug: show what was found
+        all_matching = [s for s in all_sensors if s.get('device_id', '').lower() == device_id_lower]
+        print(f"DEBUG: session/establish for device_id='{device_id}' - Found {len(all_matching)} sensors, {len(matching_sensors)} active", file=sys.stderr)
+        print(f"DEBUG: session/establish - Total sensors in database: {len(all_sensors)}", file=sys.stderr)
+        if len(all_sensors) > 0:
+            print(f"DEBUG: session/establish - Sample sensor device_ids: {[s.get('device_id') for s in all_sensors[:5]]}", file=sys.stderr)
+        for s in all_matching:
+            print(f"DEBUG:   - device_id='{s.get('device_id')}', status='{s.get('status')}', user_id={s.get('user_id')}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        if all_matching:
+            inactive_statuses = [s.get('status') for s in all_matching]
+            return jsonify({
+                "error": f"device '{device_id}' found but not active (status: {', '.join(set(inactive_statuses))})"
+            }), 403
+        else:
+            return jsonify({
+                "error": f"device '{device_id}' not found in database"
+            }), 403
     
     ch = device_challenges.get(challenge_id)
     if not ch or ch.get('device_id', '').lower() != device_id.lower():
@@ -864,15 +1107,16 @@ def api_device_session_establish():
     # Generate unique session token (ensure no collision in database)
     max_attempts = 10
     session_token = None
-    expires_at = datetime.utcnow() + timedelta(seconds=DEVICE_SESSION_TTL_SECONDS)
+    # Pass TTL seconds instead of datetime to ensure timezone consistency with MySQL NOW()
+    expires_at_ttl = DEVICE_SESSION_TTL_SECONDS
     
     for _ in range(max_attempts):
         candidate = secrets.token_urlsafe(48)
         # Check if token exists in database
         existing = get_device_session(candidate)
         if not existing:
-            # Try to create session in database
-            if create_device_session(candidate, device_id, expires_at):
+            # Try to create session in database (pass TTL seconds, not datetime)
+            if create_device_session(candidate, device_id, expires_at_ttl):
                 session_token = candidate
                 break
     
@@ -888,59 +1132,643 @@ def api_device_session_establish():
 @app.route('/api/provision/request', methods=['POST'])
 @login_required
 def api_provision_request():
-    # Publish a provision request to MQTT so the Pi agent can generate and publish its key
-    mqtt_host = os.environ.get('MQTT_HOST')
-    if not mqtt_host:
-        return jsonify({"error": "MQTT_HOST not configured on server"}), 500
+    """Request initial key generation (only if keys don't exist)."""
+    return _send_provision_message('request')
+
+@app.route('/api/provision/update', methods=['POST'])
+@login_required
+def api_provision_update():
+    """Update/regenerate existing keys (force new keys)."""
+    import sys
+    import traceback
+    import os
     
-    # Get current user ID
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"error": "User session invalid"}), 401
+    # CRITICAL: Write to file immediately to ensure we see it
+    with open('provision_debug.log', 'a', encoding='utf-8') as f:
+        f.write(f"\n{'='*80}\n")
+        f.write(f"[{datetime.now()}] api_provision_update CALLED\n")
+        f.write(f"Method: {request.method}\n")
+        f.write(f"Path: {request.path}\n")
+        f.write(f"User ID: {session.get('user_id')}\n")
+        f.write(f"MQTT_USER: {os.environ.get('MQTT_USER', 'NOT SET')}\n")
+        f.write(f"MQTT_PASSWORD: {'SET' if os.environ.get('MQTT_PASSWORD') else 'NOT SET'}\n")
+        f.flush()
     
     try:
-        data = request.get_json(force=True, silent=True) or {}
+        # Force immediate output with environment check - using BOTH logger and stderr
+        app.logger.error("=" * 80)
+        app.logger.error("[api_provision_update] ====== ENDPOINT CALLED ======")
+        app.logger.error(f"[api_provision_update] Method: {request.method}")
+        app.logger.error(f"[api_provision_update] Path: {request.path}")
+        app.logger.error(f"[api_provision_update] User ID: {session.get('user_id')}")
+        app.logger.error(f"[api_provision_update] ENV CHECK - MQTT_USER: {os.environ.get('MQTT_USER', 'NOT SET')}")
+        app.logger.error(f"[api_provision_update] ENV CHECK - MQTT_PASSWORD: {'SET' if os.environ.get('MQTT_PASSWORD') else 'NOT SET'} (len: {len(os.environ.get('MQTT_PASSWORD', ''))})")
+        app.logger.error(f"[api_provision_update] ENV CHECK - MQTT_HOST: {os.environ.get('MQTT_HOST', 'NOT SET')}")
+        print("=" * 80, file=sys.stderr)
+        print("[api_provision_update] ====== ENDPOINT CALLED ======", file=sys.stderr)
+        print(f"[api_provision_update] Method: {request.method}", file=sys.stderr)
+        print(f"[api_provision_update] Path: {request.path}", file=sys.stderr)
+        print(f"[api_provision_update] User ID: {session.get('user_id')}", file=sys.stderr)
+        print(f"[api_provision_update] ENV CHECK - MQTT_USER: {os.environ.get('MQTT_USER', 'NOT SET')}", file=sys.stderr)
+        print(f"[api_provision_update] ENV CHECK - MQTT_PASSWORD: {'SET' if os.environ.get('MQTT_PASSWORD') else 'NOT SET'} (len: {len(os.environ.get('MQTT_PASSWORD', ''))})", file=sys.stderr)
+        print(f"[api_provision_update] ENV CHECK - MQTT_HOST: {os.environ.get('MQTT_HOST', 'NOT SET')}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        result = _send_provision_message('update')
+        
+        app.logger.error(f"[api_provision_update] ====== _send_provision_message RETURNED ======")
+        app.logger.error(f"[api_provision_update] Result type: {type(result)}")
+        app.logger.error(f"[api_provision_update] Result value: {result}")
+        print(f"[api_provision_update] ====== _send_provision_message RETURNED ======", file=sys.stderr)
+        print(f"[api_provision_update] Result type: {type(result)}", file=sys.stderr)
+        print(f"[api_provision_update] Result value: {result}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        app.logger.error("[api_provision_update] ====== ENDPOINT RETURNING ======")
+        print("[api_provision_update] ====== ENDPOINT RETURNING ======", file=sys.stderr)
+        sys.stderr.flush()
+        
+        # Ensure we always return a valid response
+        if result is None:
+            app.logger.error("[api_provision_update] ❌ WARNING: _send_provision_message returned None!")
+            print("[api_provision_update] ❌ WARNING: _send_provision_message returned None!", file=sys.stderr)
+            sys.stderr.flush()
+            return jsonify({"error": "Internal server error", "message": "Provision function returned no response"}), 500
+        
+        return result
+    except Exception as e:
+        error_msg = f"Exception in api_provision_update: {str(e)}"
+        
+        # Write to file
+        with open('provision_debug.log', 'a', encoding='utf-8') as f:
+            f.write(f"ERROR: {error_msg}\n")
+            f.write(f"Traceback:\n{traceback.format_exc()}\n")
+            f.flush()
+        
+        app.logger.error("=" * 80)
+        app.logger.error(f"[api_provision_update] ❌ {error_msg}")
+        app.logger.error(f"[api_provision_update] Traceback:\n{traceback.format_exc()}")
+        app.logger.error("=" * 80)
+        print("=" * 80, file=sys.stderr)
+        print(f"[api_provision_update] ❌ {error_msg}", file=sys.stderr)
+        print(f"[api_provision_update] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({"error": error_msg, "details": str(e)}), 500
+
+def _send_provision_message(action: str):
+    """Helper function to send provision messages (request or update).
+    
+    Args:
+        action: 'request' for initial keys, 'update' for regenerating keys
+    """
+    # Validate action parameter
+    if not action or not isinstance(action, str):
+        error_msg = f"Invalid action parameter: {action}"
+        app.logger.error(f"[_send_provision_message] ❌ {error_msg}")
+        return jsonify({"error": error_msg}), 500
+    
+    # Safely get action title for logging
+    try:
+        action_title = action.title()
     except Exception:
+        action_title = str(action)
+    
+    import os
+    try:
+        app.logger.error("=" * 80)
+        app.logger.error(f"[_send_provision_message] ====== FUNCTION CALLED ======")
+        app.logger.error(f"[_send_provision_message] Action: {action}")
+        app.logger.error(f"[_send_provision_message] ENV at start - MQTT_USER: {os.environ.get('MQTT_USER', 'NOT SET')}")
+        app.logger.error(f"[_send_provision_message] ENV at start - MQTT_PASSWORD: {'SET' if os.environ.get('MQTT_PASSWORD') else 'NOT SET'}")
+        print("=" * 80, file=sys.stderr)
+        print(f"[_send_provision_message] ====== FUNCTION CALLED ======", file=sys.stderr)
+        print(f"[_send_provision_message] Action: {action}", file=sys.stderr)
+        print(f"[_send_provision_message] ENV at start - MQTT_USER: {os.environ.get('MQTT_USER', 'NOT SET')}", file=sys.stderr)
+        print(f"[_send_provision_message] ENV at start - MQTT_PASSWORD: {'SET' if os.environ.get('MQTT_PASSWORD') else 'NOT SET'}", file=sys.stderr)
+        sys.stderr.flush()
+    except Exception as log_err:
+        # If logging fails, continue anyway
+        print(f"[_send_provision_message] Warning: Logging failed: {log_err}", file=sys.stderr)
+        sys.stderr.flush()
+    
+    # Wrap entire function body in try-except to catch any unhandled exceptions
+    try:
+        print(f"[_send_provision_message] Starting for action: {action}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        mqtt_host = os.environ.get('MQTT_HOST')
+        print(f"[_send_provision_message] MQTT_HOST from env: {mqtt_host}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        if not mqtt_host:
+            error_msg = "MQTT_HOST not configured on server. Please set MQTT_HOST environment variable (e.g., MQTT_HOST=192.168.43.214)"
+            print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+            sys.stderr.flush()
+            return jsonify({"error": error_msg, "hint": "Set MQTT_HOST environment variable to your MQTT broker address"}), 500
+        
+        # Get current user ID
+        user_id = session.get('user_id')
+        print(f"[_send_provision_message] User ID from session: {user_id}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        if not user_id:
+            return jsonify({"error": "User session invalid"}), 401
+    except Exception as e:
+        import traceback
+        error_msg = f"Exception at start of _send_provision_message: {str(e)}"
+        print(f"[_send_provision_message] ❌ {error_msg}", file=sys.stderr)
+        print(f"[_send_provision_message] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({"error": error_msg, "details": str(e)}), 500
+    
+    try:
+        print(f"[_send_provision_message] Getting JSON data from request...", file=sys.stderr)
+        sys.stderr.flush()
+        data = request.get_json(force=True, silent=True) or {}
+        print(f"[_send_provision_message] Received data: {data}", file=sys.stderr)
+        sys.stderr.flush()
+    except Exception as json_err:
+        import traceback
+        print(f"[_send_provision_message] ❌ Error parsing JSON: {json_err}", file=sys.stderr)
+        print(f"[_send_provision_message] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+        sys.stderr.flush()
         data = {}
+    
     device_id = sanitize_input(data.get('device_id') or '')
+    print(f"[_send_provision_message] Extracted device_id: '{device_id}'", file=sys.stderr)
+    sys.stderr.flush()
+    
     device_id_valid, device_id_error = validate_device_id(device_id)
     if not device_id_valid:
-        return jsonify({"error": device_id_error or "Invalid device_id."}), 400
+        error_msg = device_id_error or "Invalid device_id."
+        print(f"[_send_provision_message] ❌ {error_msg}", file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({"error": error_msg}), 400
     
-    # Prevent duplicate requests within 5 seconds for the same device_id
-    last_sent_time = provision_last_sent.get(device_id)
+    # Prevent duplicate requests within 5 seconds for the same device_id and action
+    request_key = f"{device_id}:{action}"
+    last_sent_time = provision_last_sent.get(request_key)
     if last_sent_time:
         time_since_last = (datetime.utcnow() - last_sent_time).total_seconds()
         if time_since_last < 5:
-            print(f"[Provision Request] ⏭️  Skipping duplicate request for '{device_id}' (last sent {time_since_last:.1f}s ago)")
-            return jsonify({"status": "skipped", "reason": "duplicate_request", "device_id": device_id})
+            print(f"[Provision {action_title}] ⏭️  Skipping duplicate request for '{device_id}' (last sent {time_since_last:.1f}s ago)")
+            return jsonify({"status": "skipped", "reason": "duplicate_request", "device_id": device_id, "action": action})
     
     topic_base = os.environ.get('MQTT_PROVISION_TOPIC_BASE', 'provision')
-    topic = f"{topic_base}/{device_id}/request"
-    # Include user_id in payload so Pi can create user folder
-    payload = json.dumps({"device_id": device_id, "action": "generate_and_publish_key", "user_id": str(user_id)})
-    print(f"[Provision Request] Sending MQTT message:")
-    print(f"  Topic: {topic}")
-    print(f"  Payload: {payload}")
-    print(f"  User ID: {user_id}")
-    print(f"  Device ID: {device_id}")
+    topic = f"{topic_base}/{device_id}/{action}"
+    
+    # Prepare payload dictionary
+    payload_dict = {"device_id": device_id, "action": action, "user_id": str(user_id)}
+    
+    # Apply E2EE if device key exists (for "update" and "delete" actions)
+    # Note: "request" actions may not have keys yet (chicken-and-egg problem)
+    payload = None
+    use_e2ee = False
+    device_key_path = None
+    
+    if action in ('update', 'delete'):
+        # Check multiple locations for device public key (same logic as session establishment)
+        device_key_path = None
+        key_source = None
+        
+        # Debug: Log all search paths
+        app.logger.error(f"[Provision {action_title}] 🔍 Searching for key for device_id='{device_id}', user_id='{user_id}'")
+        print(f"[Provision {action_title}] 🔍 Searching for key for device_id='{device_id}', user_id='{user_id}'", file=sys.stderr)
+        
+        # 1. Check user_keys/{user_id}/{device_id}_public.pem (Flask's primary location)
+        user_key_path = get_user_key_file(user_id, device_id)
+        app.logger.error(f"[Provision {action_title}]   Checking: {user_key_path} (exists: {os.path.exists(user_key_path)})")
+        print(f"[Provision {action_title}]   Checking: {user_key_path} (exists: {os.path.exists(user_key_path)})", file=sys.stderr)
+        if os.path.exists(user_key_path):
+            device_key_path = user_key_path
+            key_source = f"user_keys/{user_id}/{device_id}_public.pem"
+        
+        # 2. Check sensor_keys/{user_id}/{device_id}/sensor_public.pem (provision agent location)
+        if not device_key_path:
+            sensor_pub_path_user = os.path.join(os.path.dirname(__file__), "sensor_keys", str(user_id), device_id, "sensor_public.pem")
+            app.logger.error(f"[Provision {action_title}]   Checking: {sensor_pub_path_user} (exists: {os.path.exists(sensor_pub_path_user)})")
+            print(f"[Provision {action_title}]   Checking: {sensor_pub_path_user} (exists: {os.path.exists(sensor_pub_path_user)})", file=sys.stderr)
+            if os.path.exists(sensor_pub_path_user):
+                device_key_path = sensor_pub_path_user
+                key_source = f"sensor_keys/{user_id}/{device_id}/sensor_public.pem"
+        
+        # 3. Fallback to global sensor_keys/{device_id}/sensor_public.pem (legacy)
+        if not device_key_path:
+            sensor_pub_path = os.path.join(os.path.dirname(__file__), "sensor_keys", device_id, "sensor_public.pem")
+            app.logger.error(f"[Provision {action_title}]   Checking: {sensor_pub_path} (exists: {os.path.exists(sensor_pub_path)})")
+            print(f"[Provision {action_title}]   Checking: {sensor_pub_path} (exists: {os.path.exists(sensor_pub_path)})", file=sys.stderr)
+            if os.path.exists(sensor_pub_path):
+                device_key_path = sensor_pub_path
+                key_source = f"sensor_keys/{device_id}/sensor_public.pem"
+        
+        # 4. Fallback to in-memory pending_keys (if key was just received via MQTT but not yet saved to file)
+        if not device_key_path:
+            app.logger.error(f"[Provision {action_title}]   Checking pending_keys (device_id in pending_keys: {device_id in pending_keys})")
+            print(f"[Provision {action_title}]   Checking pending_keys (device_id in pending_keys: {device_id in pending_keys})", file=sys.stderr)
+            if device_id in pending_keys:
+                try:
+                    # Create temporary key file for encryption
+                    import tempfile
+                    temp_key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
+                    temp_key_file.write(pending_keys[device_id])
+                    temp_key_file.close()
+                    device_key_path = temp_key_file.name
+                    key_source = f"pending_keys (in-memory, temp file: {device_key_path})"
+                    app.logger.error(f"[Provision {action_title}] ✅ Using in-memory pending key for {device_id}")
+                    print(f"[Provision {action_title}] ✅ Using in-memory pending key for {device_id}", file=sys.stderr)
+                except Exception as temp_err:
+                    app.logger.error(f"[Provision {action_title}] ❌ Failed to create temp key file: {temp_err}")
+                    print(f"[Provision {action_title}] ❌ Failed to create temp key file: {temp_err}", file=sys.stderr)
+        
+        # 5. Fallback to database (if key is in DB but not in filesystem)
+        if not device_key_path:
+            app.logger.error(f"[Provision {action_title}]   Checking database for key...")
+            print(f"[Provision {action_title}]   Checking database for key...", file=sys.stderr)
+            try:
+                srow = get_sensor_by_device_id(device_id, user_id)
+                has_key = srow and srow.get('public_key')
+                app.logger.error(f"[Provision {action_title}]   Database query result: sensor found={srow is not None}, has_key={bool(has_key)}")
+                print(f"[Provision {action_title}]   Database query result: sensor found={srow is not None}, has_key={bool(has_key)}", file=sys.stderr)
+                if has_key:
+                    try:
+                        # Create temporary key file for encryption
+                        import tempfile
+                        temp_key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
+                        temp_key_file.write(srow.get('public_key'))
+                        temp_key_file.close()
+                        device_key_path = temp_key_file.name
+                        key_source = f"database (temp file: {device_key_path})"
+                        app.logger.error(f"[Provision {action_title}] ✅ Using database key for {device_id}")
+                        print(f"[Provision {action_title}] ✅ Using database key for {device_id}", file=sys.stderr)
+                    except Exception as temp_err:
+                        app.logger.error(f"[Provision {action_title}] ❌ Failed to create temp key file from DB: {temp_err}")
+                        print(f"[Provision {action_title}] ❌ Failed to create temp key file from DB: {temp_err}", file=sys.stderr)
+            except Exception as db_err:
+                app.logger.error(f"[Provision {action_title}] ❌ Failed to query database for key: {db_err}")
+                print(f"[Provision {action_title}] ❌ Failed to query database for key: {db_err}", file=sys.stderr)
+        
+        if device_key_path:
+            try:
+                # Encrypt payload with E2EE
+                encrypted_payload = encrypt_data(payload_dict, device_key_path)
+                payload = json.dumps(encrypted_payload)
+                use_e2ee = True
+                app.logger.error(f"[Provision {action_title}] ✅ E2EE encryption applied (key found: {key_source})")
+                print(f"[Provision {action_title}] ✅ E2EE encryption applied (key found: {key_source})", file=sys.stderr)
+            except Exception as e2ee_err:
+                # If encryption fails, fall back to plaintext
+                app.logger.error(f"[Provision {action_title}] ⚠️  E2EE encryption failed: {e2ee_err}, falling back to plaintext")
+                print(f"[Provision {action_title}] ⚠️  E2EE encryption failed: {e2ee_err}, falling back to plaintext", file=sys.stderr)
+                import traceback
+                app.logger.error(f"[Provision {action_title}] Traceback: {traceback.format_exc()}")
+                payload = json.dumps(payload_dict)
+        else:
+            # Key doesn't exist in any location, use plaintext
+            payload = json.dumps(payload_dict)
+            app.logger.error(f"[Provision {action_title}] ⚠️  E2EE not applied (key not found in any location), using plaintext")
+            print(f"[Provision {action_title}] ⚠️  E2EE not applied (key not found in any location), using plaintext", file=sys.stderr)
+            print(f"[Provision {action_title}]   Searched: user_keys/{user_id}/{device_id}_public.pem, sensor_keys/{user_id}/{device_id}/sensor_public.pem, sensor_keys/{device_id}/sensor_public.pem", file=sys.stderr)
+    else:
+        # "request" action - key may not exist yet, use plaintext
+        payload = json.dumps(payload_dict)
+        app.logger.error(f"[Provision {action_title}] ⚠️  E2EE not applied for 'request' action (key may not exist yet), using plaintext")
+        print(f"[Provision {action_title}] ⚠️  E2EE not applied for 'request' action (key may not exist yet), using plaintext", file=sys.stderr)
+    
+    print(f"[Provision {action_title}] Sending MQTT message:", file=sys.stderr)
+    print(f"  Topic: {topic}", file=sys.stderr)
+    print(f"  E2EE: {'✅ Enabled' if use_e2ee else '❌ Disabled (plaintext)'}", file=sys.stderr)
+    print(f"  Payload length: {len(payload)} bytes", file=sys.stderr)
+    print(f"  User ID: {user_id}", file=sys.stderr)
+    print(f"  Device ID: {device_id}", file=sys.stderr)
+    sys.stderr.flush()
+    
+    # Initialize publish_kwargs to None to ensure it's always defined
+    publish_kwargs = None
+    
     try:
+        print(f"[Provision {action_title}] Attempting to import paho.mqtt.publish...", file=sys.stderr)
+        sys.stderr.flush()
         import paho.mqtt.publish as publish
-        publish_kwargs = _get_mqtt_publish_kwargs()
-        print(f"[Provision Request] MQTT publish kwargs: {publish_kwargs}")
-        publish.single(topic, payload, **publish_kwargs)
-        print(f"[Provision Request] ✅ MQTT message sent successfully")
+        print(f"[Provision {action_title}] ✅ paho.mqtt.publish imported successfully", file=sys.stderr)
+        sys.stderr.flush()
+        
+        app.logger.error("=" * 80)
+        app.logger.error(f"[Provision {action_title}] ====== ABOUT TO CALL _get_mqtt_publish_kwargs() ======")
+        print("=" * 80, file=sys.stderr)
+        print(f"[Provision {action_title}] ====== ABOUT TO CALL _get_mqtt_publish_kwargs() ======", file=sys.stderr)
+        sys.stderr.flush()
         try:
-            provision_last_sent[device_id] = datetime.utcnow()
-        except Exception:
-            pass
-        return jsonify({"status": "sent", "topic": topic, "user_id": str(user_id)})
+            app.logger.error(f"[Provision {action_title}] Calling _get_mqtt_publish_kwargs() NOW...")
+            print(f"[Provision {action_title}] Calling _get_mqtt_publish_kwargs() NOW...", file=sys.stderr)
+            sys.stderr.flush()
+            publish_kwargs = _get_mqtt_publish_kwargs()
+            app.logger.error(f"[Provision {action_title}] ====== _get_mqtt_publish_kwargs() RETURNED ======")
+            print(f"[Provision {action_title}] ====== _get_mqtt_publish_kwargs() RETURNED ======", file=sys.stderr)
+            sys.stderr.flush()
+            app.logger.error(f"[Provision {action_title}] ✅ MQTT publish kwargs retrieved - keys: {list(publish_kwargs.keys())}")
+            print(f"[Provision {action_title}] ✅ MQTT publish kwargs retrieved:", file=sys.stderr)
+            # Log kwargs but hide password
+            safe_kwargs = {k: (v if k != 'auth' else {'username': v.get('username', 'N/A'), 'password': '***'}) for k, v in publish_kwargs.items()}
+            app.logger.error(f"[Provision {action_title}]   {safe_kwargs}")
+            print(f"[Provision {action_title}]   {safe_kwargs}", file=sys.stderr)
+            app.logger.error(f"[Provision {action_title}]   User: {publish_kwargs.get('auth', {}).get('username', 'NONE')}")
+            print(f"[Provision {action_title}]   User: {publish_kwargs.get('auth', {}).get('username', 'NONE')}", file=sys.stderr)
+            app.logger.error(f"[Provision {action_title}]   Has password: {bool(publish_kwargs.get('auth', {}).get('password'))}")
+            print(f"[Provision {action_title}]   Has password: {bool(publish_kwargs.get('auth', {}).get('password'))}", file=sys.stderr)
+            app.logger.error(f"[Provision {action_title}]   Has auth key: {'auth' in publish_kwargs}")
+            print(f"[Provision {action_title}]   Has auth key: {'auth' in publish_kwargs}", file=sys.stderr)
+            sys.stderr.flush()
+            
+            # CRITICAL: Force immediate write to file to bypass any buffering
+            try:
+                with open('provision_debug.log', 'a', encoding='utf-8') as f:
+                    f.write(f"[{datetime.now()}] [Provision {action_title}] LINE 1: AFTER 'Has auth key' log\n")
+                    f.flush()
+                app.logger.error(f"[Provision {action_title}] ✅ File write 1 completed")
+                print(f"[Provision {action_title}] ✅ File write 1 completed", file=sys.stderr)
+                sys.stderr.flush()
+            except Exception as file_err:
+                app.logger.error(f"[Provision {action_title}] ❌ File write 1 failed: {file_err}")
+                print(f"[Provision {action_title}] ❌ File write 1 failed: {file_err}", file=sys.stderr)
+                sys.stderr.flush()
+            
+            app.logger.error(f"[Provision {action_title}] ====== KWARGS RETRIEVED SUCCESSFULLY ======")
+            print(f"[Provision {action_title}] ====== KWARGS RETRIEVED SUCCESSFULLY ======", file=sys.stderr)
+            sys.stderr.flush()
+            
+            try:
+                with open('provision_debug.log', 'a', encoding='utf-8') as f:
+                    f.write(f"[{datetime.now()}] [Provision {action_title}] LINE 2: AFTER 'KWARGS RETRIEVED SUCCESSFULLY'\n")
+                    f.flush()
+            except Exception as file_err:
+                app.logger.error(f"[Provision {action_title}] ❌ File write 2 failed: {file_err}")
+                print(f"[Provision {action_title}] ❌ File write 2 failed: {file_err}", file=sys.stderr)
+                sys.stderr.flush()
+            
+            app.logger.error(f"[Provision {action_title}] ====== EXITING TRY BLOCK FOR KWARGS ======")
+            print(f"[Provision {action_title}] ====== EXITING TRY BLOCK FOR KWARGS ======", file=sys.stderr)
+            sys.stderr.flush()
+        except Exception as kwargs_err:
+            app.logger.error(f"[Provision {action_title}] ====== EXCEPTION IN KWARGS TRY BLOCK ======")
+            print(f"[Provision {action_title}] ====== EXCEPTION IN KWARGS TRY BLOCK ======", file=sys.stderr)
+            sys.stderr.flush()
+            import traceback
+            error_msg = f"Failed to get MQTT publish kwargs: {str(kwargs_err)}"
+            app.logger.error(f"[Provision {action_title}] ❌ {error_msg}")
+            app.logger.error(f"[Provision {action_title}] Traceback:\n{traceback.format_exc()}")
+            print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+            print(f"[Provision {action_title}] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+            sys.stderr.flush()
+            return jsonify({"error": error_msg, "details": str(kwargs_err)}), 500
+        
+        app.logger.error(f"[Provision {action_title}] ====== OUTSIDE KWARGS TRY BLOCK, CONTINUING ======")
+        print(f"[Provision {action_title}] ====== OUTSIDE KWARGS TRY BLOCK, CONTINUING ======", file=sys.stderr)
+        sys.stderr.flush()
+        
+        app.logger.error(f"[Provision {action_title}] ====== AFTER GETTING KWARGS, BEFORE VALIDATION ======")
+        print(f"[Provision {action_title}] ====== AFTER GETTING KWARGS, BEFORE VALIDATION ======", file=sys.stderr)
+        sys.stderr.flush()
+        
+        # Log publish_kwargs status before validation
+        try:
+            app.logger.error(f"[Provision {action_title}] publish_kwargs type: {type(publish_kwargs)}, value: {publish_kwargs}")
+            print(f"[Provision {action_title}] publish_kwargs type: {type(publish_kwargs)}, value: {publish_kwargs}", file=sys.stderr)
+            sys.stderr.flush()
+        except Exception as log_err:
+            app.logger.error(f"[Provision {action_title}] Error logging publish_kwargs: {log_err}")
+            print(f"[Provision {action_title}] Error logging publish_kwargs: {log_err}", file=sys.stderr)
+            sys.stderr.flush()
+        
+        app.logger.error(f"[Provision {action_title}] ====== ABOUT TO ENTER VALIDATION TRY BLOCK ======")
+        print(f"[Provision {action_title}] ====== ABOUT TO ENTER VALIDATION TRY BLOCK ======", file=sys.stderr)
+        sys.stderr.flush()
+        
+        try:
+            app.logger.error(f"[Provision {action_title}] ====== INSIDE VALIDATION TRY BLOCK ======")
+            print(f"[Provision {action_title}] ====== INSIDE VALIDATION TRY BLOCK ======", file=sys.stderr)
+            sys.stderr.flush()
+            
+            # Defensive check: ensure publish_kwargs was successfully retrieved and is a dict
+            if publish_kwargs is None:
+                error_msg = "Internal error: publish_kwargs not retrieved"
+                app.logger.error(f"[Provision {action_title}] ❌ {error_msg}")
+                print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+                sys.stderr.flush()
+                return jsonify({"error": error_msg}), 500
+            
+            if not isinstance(publish_kwargs, dict):
+                error_msg = f"Internal error: publish_kwargs is not a dict (type: {type(publish_kwargs)})"
+                app.logger.error(f"[Provision {action_title}] ❌ {error_msg}")
+                print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+                sys.stderr.flush()
+                return jsonify({"error": error_msg}), 500
+            
+            # Validate MQTT configuration before attempting publish
+            if 'hostname' not in publish_kwargs or not publish_kwargs.get('hostname'):
+                error_msg = "MQTT_HOST not configured or invalid"
+                app.logger.error(f"[Provision {action_title}] ❌ {error_msg}")
+                print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+                sys.stderr.flush()
+                return jsonify({"error": error_msg}), 500
+            
+            app.logger.error(f"[Provision {action_title}] ====== VALIDATION PASSED, ENTERING PUBLISH TRY BLOCK ======")
+            print(f"[Provision {action_title}] ====== VALIDATION PASSED, ENTERING PUBLISH TRY BLOCK ======", file=sys.stderr)
+            sys.stderr.flush()
+        except Exception as validation_err:
+            import traceback
+            error_msg = f"Exception during validation: {str(validation_err)}"
+            app.logger.error(f"[Provision {action_title}] ❌ {error_msg}")
+            app.logger.error(f"[Provision {action_title}] Traceback:\n{traceback.format_exc()}")
+            print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+            print(f"[Provision {action_title}] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
+            sys.stderr.flush()
+            return jsonify({"error": error_msg, "details": str(validation_err)}), 500
+        
+        try:
+            # Add keepalive and client_id to kwargs if not present
+            if 'keepalive' not in publish_kwargs:
+                publish_kwargs['keepalive'] = 60
+            if 'client_id' not in publish_kwargs:
+                publish_kwargs['client_id'] = f"flask_provision_{action}_{device_id}_{int(time.time())}"
+            
+            app.logger.error(f"[Provision {action_title}] ====== ABOUT TO CALL publish.single() ======")
+            app.logger.error(f"[Provision {action_title}] Publishing to topic: {topic}")
+            app.logger.error(f"[Provision {action_title}] Payload: {payload}")
+            app.logger.error(f"[Provision {action_title}] MQTT Host: {publish_kwargs.get('hostname')}:{publish_kwargs.get('port')}")
+            app.logger.error(f"[Provision {action_title}] MQTT User: {publish_kwargs.get('auth', {}).get('username', 'NONE')}")
+            print(f"[Provision {action_title}] ====== ABOUT TO CALL publish.single() ======", file=sys.stderr)
+            print(f"[Provision {action_title}] Publishing to topic: {topic}", file=sys.stderr)
+            print(f"[Provision {action_title}] Payload: {payload}", file=sys.stderr)
+            print(f"[Provision {action_title}] MQTT Host: {publish_kwargs.get('hostname')}:{publish_kwargs.get('port')}", file=sys.stderr)
+            print(f"[Provision {action_title}] MQTT User: {publish_kwargs.get('auth', {}).get('username', 'NONE')}", file=sys.stderr)
+            sys.stderr.flush()
+            
+            # Call publish.single() directly
+            # Note: publish.single() doesn't return a value - it raises an exception on failure
+            publish.single(topic, payload, qos=1, **publish_kwargs)
+            
+            app.logger.error(f"[Provision {action_title}] ====== publish.single() COMPLETED SUCCESSFULLY ======")
+            app.logger.error(f"[Provision {action_title}] ✅ Message published to MQTT broker")
+            app.logger.error(f"[Provision {action_title}] 💡 If provision agent doesn't receive it, check:")
+            app.logger.error(f"[Provision {action_title}]    1. Provision agent is running and connected")
+            app.logger.error(f"[Provision {action_title}]    2. Provision agent subscribed to: {topic_base}/+/{action}")
+            app.logger.error(f"[Provision {action_title}]    3. MQTT broker ACL allows user to publish to this topic")
+            print(f"[Provision {action_title}] ====== publish.single() COMPLETED SUCCESSFULLY ======", file=sys.stderr)
+            print(f"[Provision {action_title}] ✅ Message published to MQTT broker", file=sys.stderr)
+            print(f"[Provision {action_title}] 💡 If provision agent doesn't receive it, check:", file=sys.stderr)
+            print(f"[Provision {action_title}]    1. Provision agent is running and connected", file=sys.stderr)
+            print(f"[Provision {action_title}]    2. Provision agent subscribed to: {topic_base}/+/{action}", file=sys.stderr)
+            print(f"[Provision {action_title}]    3. MQTT broker ACL allows user to publish to this topic", file=sys.stderr)
+            sys.stderr.flush()
+            
+            # Success - update last sent time and return success response
+            try:
+                provision_last_sent[request_key] = datetime.utcnow()
+            except Exception:
+                pass
+            
+            app.logger.error(f"[Provision {action_title}] ====== RETURNING SUCCESS RESPONSE ======")
+            print(f"[Provision {action_title}] ====== RETURNING SUCCESS RESPONSE ======", file=sys.stderr)
+            sys.stderr.flush()
+            
+            return jsonify({
+                "status": "sent", 
+                "topic": topic, 
+                "action": action, 
+                "user_id": str(user_id),
+                "message": "MQTT message published successfully",
+                "troubleshooting": {
+                    "check_provision_agent": "Ensure provision_agent.py is running on Raspberry Pi",
+                    "check_subscription": f"Provision agent should be subscribed to: {topic_base}/+/{action}",
+                    "check_mqtt_broker": f"Verify MQTT broker is accessible at {publish_kwargs.get('hostname')}:{publish_kwargs.get('port')}",
+                    "check_acl": "Verify MQTT user has publish permission for provision topics",
+                    "check_logs": "Check provision agent console output for received messages"
+                }
+            })
+        except ConnectionRefusedError as conn_err:
+            hostname = publish_kwargs.get('hostname') if publish_kwargs else 'unknown'
+            port = publish_kwargs.get('port') if publish_kwargs else 'unknown'
+            error_msg = f"MQTT broker connection refused. Is the broker running at {hostname}:{port}?"
+            print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+            print(f"[Provision {action_title}] Error: {conn_err}", file=sys.stderr)
+            sys.stderr.flush()
+            return jsonify({"error": error_msg, "details": str(conn_err), "hint": "Check if MQTT broker is running and accessible"}), 500
+        except TimeoutError as timeout_err:
+            # This is now raised by our timeout wrapper
+            hostname = publish_kwargs.get('hostname') if publish_kwargs else 'unknown'
+            port = publish_kwargs.get('port') if publish_kwargs else 'unknown'
+            error_msg = str(timeout_err) or f"MQTT publish timed out. Cannot reach broker at {hostname}:{port}"
+            print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+            print(f"[Provision {action_title}] Error: {timeout_err}", file=sys.stderr)
+            print(f"[Provision {action_title}] 💡 Tip: Check network connectivity and MQTT broker status", file=sys.stderr)
+            print(f"[Provision {action_title}] 💡 When running via SSH, this timeout prevents indefinite blocking", file=sys.stderr)
+            sys.stderr.flush()
+            return jsonify({"error": error_msg, "details": str(timeout_err), "hint": "Check network connectivity and MQTT broker status"}), 500
+        except Exception as pub_err:
+            # More specific error handling for publish failures
+            error_str = str(pub_err)
+            error_msg = f"Failed to publish MQTT message: {error_str}"
+            
+            # Check for "Not authorized" error specifically
+            if "not authorized" in error_str.lower():
+                error_msg = "MQTT broker rejected publish: Not authorized. Check MQTT_USER, MQTT_PASSWORD, and ACL permissions for 'provision/+/update' topic"
+                hint = "Check MQTT_USER, MQTT_PASSWORD, and ACL permissions for the provision topic"
+            else:
+                error_msg = f"Failed to publish MQTT message: {error_str}"
+                hint = "Check MQTT broker configuration and network connectivity"
+            
+            print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+            sys.stderr.flush()
+            return jsonify({"error": error_msg, "details": error_str, "hint": hint}), 500
+    except KeyError as key_err:
+        # Handle missing required parameters
+        error_msg = f"Missing required parameter: {str(key_err)}"
+        print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({"error": error_msg}), 500
+    except ImportError as e:
+        error_msg = f"paho-mqtt library not available: {e}"
+        print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({"error": error_msg}), 500
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        print(f"[Provision Request] ❌ MQTT publish failed: {e}")
-        print(f"[Provision Request] Error details:\n{error_details}")
-        return jsonify({"error": f"MQTT publish failed: {str(e)}"}), 500
+        error_str = str(e)
+        error_msg = f"MQTT publish failed: {error_str}"
+        
+        app.logger.error("=" * 80)
+        app.logger.error(f"[Provision {action_title}] ====== OUTER EXCEPTION HANDLER CAUGHT ERROR ======")
+        app.logger.error(f"[Provision {action_title}] Exception type: {type(e).__name__}")
+        app.logger.error(f"[Provision {action_title}] Exception message: {error_str}")
+        app.logger.error(f"[Provision {action_title}] Traceback:\n{error_details}")
+        print("=" * 80, file=sys.stderr)
+        print(f"[Provision {action_title}] ====== OUTER EXCEPTION HANDLER CAUGHT ERROR ======", file=sys.stderr)
+        print(f"[Provision {action_title}] Exception type: {type(e).__name__}", file=sys.stderr)
+        print(f"[Provision {action_title}] Exception message: {error_str}", file=sys.stderr)
+        print(f"[Provision {action_title}] Traceback:\n{error_details}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        # Provide helpful hints based on error type
+        hint = None
+        if "not authorized" in error_str.lower():
+            hint = "MQTT broker authentication/authorization failed. Check: 1) MQTT_USER and MQTT_PASSWORD environment variables, 2) ACL permissions for the user to publish to 'provision/+/update' topic"
+        elif "connection refused" in error_str.lower():
+            hint = "MQTT broker connection refused. Is the broker running?"
+        elif "timeout" in error_str.lower():
+            hint = "MQTT broker connection timeout. Check network connectivity and broker address."
+        
+        app.logger.error(f"[Provision {action_title}] ❌ {error_msg}")
+        print(f"[Provision {action_title}] ❌ {error_msg}", file=sys.stderr)
+        if hint:
+            app.logger.error(f"[Provision {action_title}] 💡 Hint: {hint}")
+            print(f"[Provision {action_title}] 💡 Hint: {hint}", file=sys.stderr)
+        app.logger.error(f"[Provision {action_title}] Error details:\n{error_details}")
+        print(f"[Provision {action_title}] Error details:\n{error_details}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        response_data = {"error": error_msg, "details": error_str}
+        if hint:
+            response_data["hint"] = hint
+        
+        app.logger.error(f"[Provision {action_title}] ====== RETURNING ERROR RESPONSE FROM OUTER EXCEPTION HANDLER ======")
+        print(f"[Provision {action_title}] ====== RETURNING ERROR RESPONSE FROM OUTER EXCEPTION HANDLER ======", file=sys.stderr)
+        sys.stderr.flush()
+        
+        return jsonify(response_data), 500
+    except Exception as final_err:
+        # Ultimate catch-all for any exception that escaped all other handlers
+        import traceback
+        error_details = traceback.format_exc()
+        error_str = str(final_err)
+        error_msg = f"Unexpected error in provision function: {error_str}"
+        
+        app.logger.error("=" * 80)
+        app.logger.error(f"[Provision {action_title}] ====== FINAL CATCH-ALL EXCEPTION HANDLER ======")
+        app.logger.error(f"[Provision {action_title}] Exception type: {type(final_err).__name__}")
+        app.logger.error(f"[Provision {action_title}] Exception message: {error_str}")
+        app.logger.error(f"[Provision {action_title}] Traceback:\n{error_details}")
+        app.logger.error("=" * 80)
+        print("=" * 80, file=sys.stderr)
+        print(f"[Provision {action_title}] ====== FINAL CATCH-ALL EXCEPTION HANDLER ======", file=sys.stderr)
+        print(f"[Provision {action_title}] Exception type: {type(final_err).__name__}", file=sys.stderr)
+        print(f"[Provision {action_title}] Exception message: {error_str}", file=sys.stderr)
+        print(f"[Provision {action_title}] Traceback:\n{error_details}", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+        sys.stderr.flush()
+        
+        return jsonify({
+            "error": error_msg,
+            "details": error_str,
+            "hint": "An unexpected error occurred. Check server logs for details."
+        }), 500
+    
+    # Safety fallback - should never reach here, but ensures we always return something
+    app.logger.error(f"[Provision {action_title}] ❌ WARNING: Reached end of function without returning!")
+    print(f"[Provision {action_title}] ❌ WARNING: Reached end of function without returning!", file=sys.stderr)
+    sys.stderr.flush()
+    return jsonify({"error": "Internal server error", "message": "Function completed without returning a response"}), 500
 
 def _within_range(value, min_val, max_val):
     if value is None:
@@ -1105,10 +1933,22 @@ def submit_data():
             if not signature_verified or not sensor_row:
                 return jsonify({"status": "error", "message": "Invalid sensor signature or no matching active sensor found."}), 400
             
-            # Cross-check device_type
+            # Cross-check device_type (case-insensitive, and allow None/empty to pass)
             payload_device_type = decrypted_data.get("device_type")
-            if payload_device_type and payload_device_type.lower() != sensor_row.get('device_type', '').lower():
-                return jsonify({"status": "error", "message": "device_type mismatch for sensor."}), 400
+            sensor_device_type = sensor_row.get('device_type', '').strip()
+            if payload_device_type and sensor_device_type:
+                # Normalize both to lowercase for comparison
+                payload_type_lower = str(payload_device_type).lower().strip()
+                sensor_type_lower = str(sensor_device_type).lower().strip()
+                if payload_type_lower != sensor_type_lower:
+                    # sys is imported at top of file, safe to use here
+                    import sys
+                    print(f"WARNING: device_type mismatch for {sensor_id}: payload='{payload_device_type}' vs db='{sensor_device_type}'", file=sys.stderr)
+                    sys.stderr.flush()
+                    return jsonify({
+                        "status": "error", 
+                        "message": f"device_type mismatch for sensor. Expected '{sensor_device_type}', got '{payload_device_type}'"
+                    }), 400
 
             # Optional device session enforcement
             session_token = decrypted_data.get('session_token')
@@ -1201,16 +2041,15 @@ def submit_data():
 
             # Determine value corresponding to device_type (case-insensitive)
             if device_type:
-                device_type_lower = device_type.lower()
-                # Prefer exact match first
-                if device_type in updated_values:
+                device_type_lower = str(device_type).lower().strip()
+                # Try case-insensitive match first (handles both "Chlorine" and "chlorine")
+                for key, val in updated_values.items():
+                    if key and str(key).lower().strip() == device_type_lower:
+                        value_for_type = val
+                        break
+                # If no match found, try exact match as fallback
+                if value_for_type is None and device_type in updated_values:
                     value_for_type = updated_values.get(device_type)
-                else:
-                    # Try case-insensitive match
-                    for key, val in updated_values.items():
-                        if key and key.lower() == device_type_lower:
-                            value_for_type = val
-                            break
 
             # Fallback: take the first available metric if still None
             if value_for_type is None and len(updated_values) > 0:
@@ -1233,14 +2072,17 @@ def submit_data():
                     msg = f"ERROR: sensor_row.get('id') is None for device_id: {sensor_id}. Cannot insert sensor data.\n"
                     print(msg, file=sys.stderr)
                     sys.stderr.flush()
+                    app_logger.error(msg)
                 elif value_for_type is None:
                     msg = f"ERROR: value_for_type is None for device_id: {sensor_id}, device_type: {device_type}, updated_values: {updated_values}\n"
                     print(msg, file=sys.stderr)
                     sys.stderr.flush()
+                    app_logger.error(msg)
                 else:
                     msg = f"DEBUG: Attempting insert_sensor_data - device_id: {sensor_id}, sensor_db_id: {sensor_db_id}, value: {value_for_type}, device_type: {device_type}\n"
                     print(msg, file=sys.stderr)
                     sys.stderr.flush()
+                    app_logger.error(msg)  # Using error level so it appears in log file
                     
                     result = insert_sensor_data(
                         sensor_db_id=sensor_db_id, 
@@ -1253,10 +2095,12 @@ def submit_data():
                         msg = f"ERROR: insert_sensor_data returned False for device_id: {sensor_id}, sensor_db_id: {sensor_db_id}\n"
                         print(msg, file=sys.stderr)
                         sys.stderr.flush()
+                        app_logger.error(msg)
                     else:
                         msg = f"SUCCESS: insert_sensor_data completed for device_id: {sensor_id}, sensor_db_id: {sensor_db_id}, value: {value_for_type}\n"
                         print(msg, file=sys.stderr)
                         sys.stderr.flush()
+                        app_logger.error(msg)  # Using error level so it appears in log file
             except Exception as e:
                 import sys
                 import traceback
@@ -1265,6 +2109,7 @@ def submit_data():
                 msg += traceback.format_exc()
                 print(msg, file=sys.stderr)
                 sys.stderr.flush()
+                app_logger.error(msg)
             
             # Update user-specific cache
             if sensor_user_id:
@@ -1322,7 +2167,13 @@ def submit_data():
             **({"reasons": reasons} if not safe else {"note": "Water meets safety standards."})
         })
     except Exception as e:
-        return f"Decryption error: {str(e)}", 400
+        import traceback
+        error_msg = f"Decryption error: {str(e)}"
+        # Log full traceback for debugging
+        print(f"ERROR in submit_data: {error_msg}", file=sys.stderr)
+        print(traceback.format_exc(), file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({"status": "error", "message": error_msg}), 400
 @app.route('/favicon.ico')
 def favicon():
     """Handle favicon requests to prevent 500 errors."""
@@ -2017,6 +2868,33 @@ def readings():
         return redirect(url_for('login'))
     return render_template('readings.html')
 
+@app.route('/api/public/active_sensors')
+def api_public_active_sensors():
+    """Public API endpoint for devices/simulators to get active sensor information."""
+    # Return active sensors with device_id, device_type, user_id, and location
+    # This allows simulators to get the correct device_type from the database
+    try:
+        all_sensors = list_sensors(user_id=None)  # Get all active sensors
+        active_sensors = [s for s in all_sensors if s.get('status') == 'active']
+        
+        # Return minimal information needed by simulators
+        sensor_list = []
+        for sensor in active_sensors:
+            sensor_list.append({
+                'device_id': sensor.get('device_id'),
+                'device_type': sensor.get('device_type'),  # Include device_type from database
+                'user_id': sensor.get('user_id'),
+                'location': sensor.get('location')
+            })
+        
+        return jsonify({'active_sensors': sensor_list}), 200
+    except Exception as e:
+        # On error, return empty list (for backward compatibility)
+        import sys
+        print(f"ERROR: api_public_active_sensors - {e}", file=sys.stderr)
+        sys.stderr.flush()
+        return jsonify({'active_sensors': []}), 200
+
 @app.route('/api/active_sensors')
 @login_required
 def api_active_sensors():
@@ -2038,74 +2916,82 @@ def api_active_sensors():
         active_sensors = []
         sensors_with_cache_data = set()
         
-        if user_id in user_latest_by_sensor:
+        if user_id in user_latest_by_sensor and user_sensors:
             for sensor in user_sensors:
                 device_id = sensor.get('device_id')
                 if device_id in user_latest_by_sensor[user_id]:
                     sensor_data = user_latest_by_sensor[user_id][device_id]
-                    active_sensors.append({
-                        'device_id': device_id,
-                        'device_type': sensor_data.get('device_type') or sensor.get('device_type'),
-                        'location': sensor_data.get('location') or sensor.get('location') or 'Unassigned',
-                        'value': sensor_data.get('value')
-                    })
-                    sensors_with_cache_data.add(device_id)
+                    # Only use cache if value is not None (has actual data)
+                    if sensor_data.get('value') is not None:
+                        active_sensors.append({
+                            'device_id': device_id,
+                            'device_type': sensor_data.get('device_type') or sensor.get('device_type'),
+                            'location': sensor_data.get('location') or sensor.get('location') or 'Unassigned',
+                            'value': sensor_data.get('value')
+                        })
+                        sensors_with_cache_data.add(device_id)
         
-        # If cache is empty or incomplete, query database for latest readings
-        if not active_sensors or len(sensors_with_cache_data) < len(user_sensors):
-            print(f"DEBUG: api_active_sensors - Cache incomplete ({len(sensors_with_cache_data)}/{len(user_sensors)}), querying database...", file=sys.stderr)
-            sys.stderr.flush()
+        # Always query database to get the latest readings (real-time data)
+        # Use the same function that history page uses (list_recent_sensor_data)
+        # This ensures consistency and reliability
+        print(f"DEBUG: api_active_sensors - Querying database for latest readings...", file=sys.stderr)
+        sys.stderr.flush()
+        
+        try:
+            # Get recent sensor data from database (same as history page uses)
+            db_readings = list_recent_sensor_data(limit=100, user_id=user_id)
             
-            # Get latest readings from database for each sensor
-            from db import get_pool
-            pool = get_pool()
-            if pool:
-                conn = _get_connection(pool)
-                cur = _get_cursor(conn, dictionary=True)
+            print(f"DEBUG: api_active_sensors - Retrieved {len(db_readings)} readings from database", file=sys.stderr)
+            sys.stderr.flush()
+            app_logger.error(f"DEBUG: api_active_sensors - Retrieved {len(db_readings)} readings from database for user_id={user_id}")
                 
-                # Get latest reading per device_id for this user
-                for sensor in user_sensors:
-                    device_id = sensor.get('device_id')
-                    # Skip if we already have cache data for this sensor
-                    if device_id in sensors_with_cache_data:
-                        continue
-                    
-                    # Query database for latest reading for this device
-                    cur.execute("""
-                        SELECT sd.value, sd.recorded_at, s.device_type, s.location
-                        FROM sensor_data sd
-                        JOIN sensors s ON s.id = sd.sensor_id
-                        WHERE sd.device_id = %s AND sd.user_id = %s
-                        ORDER BY sd.recorded_at DESC, sd.id DESC
-                        LIMIT 1
-                    """, (device_id, int(user_id)))
-                    
-                    row = cur.fetchone()
-                    if row:
-                        # Decrypt the value
-                        from db_encryption import get_db_encryption
-                        encryption = get_db_encryption()
-                        encrypted_value = row.get('value')
-                        decrypted_value = encryption.decrypt_value(encrypted_value) if encrypted_value else None
-                        
-                        if decrypted_value is not None:
-                            active_sensors.append({
-                                'device_id': device_id,
-                                'device_type': row.get('device_type') or sensor.get('device_type'),
-                                'location': row.get('location') or sensor.get('location') or 'Unassigned',
-                                'value': float(decrypted_value) if decrypted_value else None
-                            })
-                            print(f"DEBUG: api_active_sensors - Found database reading for {device_id}: {decrypted_value}", file=sys.stderr)
-                        else:
-                            # Add sensor even without reading value
-                            active_sensors.append({
-                                'device_id': device_id,
-                                'device_type': sensor.get('device_type'),
-                                'location': sensor.get('location') or 'Unassigned',
-                                'value': None
-                            })
-                    else:
-                        # No readings in database, but sensor is active - include it with null value
+            # Build a map of latest reading per device_id
+            latest_by_device = {}
+            for reading in db_readings:
+                device_id = reading.get('device_id')
+                if not device_id:
+                    continue
+                
+                # Get the most recent reading for each device
+                recorded_at = reading.get('recorded_at')
+                if device_id not in latest_by_device:
+                    latest_by_device[device_id] = reading
+                else:
+                    # Compare timestamps to get the latest
+                    existing_time = latest_by_device[device_id].get('recorded_at')
+                    if recorded_at and existing_time and recorded_at > existing_time:
+                        latest_by_device[device_id] = reading
+            
+            # Convert to active_sensors format - database data takes priority
+            # Clear cache-based sensors and rebuild from database
+            active_sensors = []
+            for device_id, reading in latest_by_device.items():
+                value = reading.get('value')  # Already decrypted by list_recent_sensor_data
+                device_type = reading.get('device_type')
+                location = reading.get('location') or 'Unassigned'
+                
+                # Find matching sensor info if available
+                sensor_info = next((s for s in user_sensors if s.get('device_id') == device_id), None)
+                if sensor_info:
+                    device_type = device_type or sensor_info.get('device_type')
+                    location = location or sensor_info.get('location') or 'Unassigned'
+                
+                active_sensors.append({
+                    'device_id': device_id,
+                    'device_type': device_type,
+                    'location': location,
+                    'value': float(value) if value is not None else None
+                })
+                print(f"DEBUG: api_active_sensors - Added sensor {device_id}: value={value}, location={location}", file=sys.stderr)
+                app_logger.error(f"DEBUG: api_active_sensors - Added sensor {device_id}: value={value}, location={location}, device_type={device_type}")
+            
+            # If we still have active sensors from list_sensors but no database readings,
+            # include them with null values
+            for sensor in user_sensors:
+                device_id = sensor.get('device_id')
+                if device_id not in latest_by_device:
+                    # Check if already in active_sensors
+                    if not any(s.get('device_id') == device_id for s in active_sensors):
                         active_sensors.append({
                             'device_id': device_id,
                             'device_type': sensor.get('device_type'),
@@ -2113,15 +2999,37 @@ def api_active_sensors():
                             'value': None
                         })
                 
-                cur.close()
-                _return_connection(pool, conn)
+        except Exception as db_err:
+            import traceback
+            print(f"ERROR: api_active_sensors - Database error: {db_err}", file=sys.stderr)
+            print(traceback.format_exc(), file=sys.stderr)
+            sys.stderr.flush()
+            # Fallback: if database query fails, use cache data we already have
+            pass
+        
         
         print(f"DEBUG: api_active_sensors - Returning {len(active_sensors)} sensors", file=sys.stderr)
         sys.stderr.flush()
+        app_logger.error(f"DEBUG: api_active_sensors - Returning {len(active_sensors)} sensors for user_id={user_id}")
+        if active_sensors:
+            for s in active_sensors:
+                msg = f"DEBUG: api_active_sensors - Sensor: {s.get('device_id')}, value: {s.get('value')}, location: {s.get('location')}"
+                print(msg, file=sys.stderr)
+                app_logger.error(msg)
+        else:
+            msg = f"DEBUG: api_active_sensors - WARNING: No sensors to return for user {user_id}, user_sensors count: {len(user_sensors)}, sensors_with_cache_data: {len(sensors_with_cache_data)}"
+            print(msg, file=sys.stderr)
+            app_logger.error(msg)
+        sys.stderr.flush()
         
-        return jsonify({
+        result = {
             'active_sensors': active_sensors
-        })
+        }
+        app_logger.error(f"DEBUG: api_active_sensors - Returning JSON response with {len(active_sensors)} sensors")
+        if active_sensors:
+            for s in active_sensors[:5]:  # Log first 5 sensors
+                app_logger.error(f"DEBUG: api_active_sensors - Sensor in response: device_id={s.get('device_id')}, value={s.get('value')}, location={s.get('location')}, device_type={s.get('device_type')}")
+        return jsonify(result)
     except Exception as e:
         import traceback
         print(f"ERROR: api_active_sensors - {e}")
@@ -2245,13 +3153,73 @@ def api_reading_request():
         if not user_sensors:
             return jsonify({"error": f"No active sensors found for location '{location}'"}), 404
         
-        # In a real implementation, this would send an MQTT message to request readings
-        # For now, just return success
-        return jsonify({
-            "status": "sent",
-            "location": location,
-            "sensor_count": len(user_sensors)
-        })
+        # Check if MQTT is configured
+        mqtt_host = os.environ.get('MQTT_HOST')
+        if not mqtt_host:
+            return jsonify({"error": "MQTT_HOST not configured on server"}), 500
+        
+        # Send MQTT reading request for each sensor at this location
+        topic_base = os.environ.get('MQTT_READING_REQUEST_TOPIC_BASE', 'reading_request')
+        successful_requests = 0
+        failed_requests = []
+        
+        try:
+            import paho.mqtt.publish as publish
+            publish_kwargs = _get_mqtt_publish_kwargs()
+            
+            for sensor in user_sensors:
+                device_id = sensor.get('device_id')
+                if not device_id:
+                    continue
+                
+                try:
+                    # Create topic: reading_request/{device_id}/request
+                    topic = f"{topic_base}/{device_id}/request"
+                    
+                    # Create payload with location and device info
+                    payload = json.dumps({
+                        "device_id": device_id,
+                        "location": location,
+                        "action": "request",
+                        "user_id": str(user_id),
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    
+                    # Publish MQTT message
+                    publish.single(topic, payload, qos=1, **publish_kwargs)
+                    successful_requests += 1
+                    
+                    print(f"[Reading Request] ✅ Sent MQTT message to {topic} for device {device_id} at location {location}")
+                    
+                except Exception as e:
+                    error_msg = f"Failed to send request for {device_id}: {str(e)}"
+                    failed_requests.append({"device_id": device_id, "error": str(e)})
+                    print(f"[Reading Request] ❌ {error_msg}")
+            
+            if successful_requests == 0:
+                return jsonify({
+                    "error": "Failed to send reading requests to any sensors",
+                    "failed_requests": failed_requests
+                }), 500
+            
+            response = {
+                "status": "sent",
+                "location": location,
+                "sensor_count": len(user_sensors),
+                "successful_requests": successful_requests,
+                "failed_requests": failed_requests if failed_requests else None
+            }
+            
+            return jsonify(response)
+            
+        except ImportError:
+            return jsonify({"error": "paho-mqtt library not available"}), 500
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"[Reading Request] ❌ MQTT publish failed: {e}")
+            print(f"[Reading Request] Error details:\n{error_details}")
+            return jsonify({"error": f"MQTT publish failed: {str(e)}"}), 500
     except Exception as e:
         import traceback
         print(f"ERROR: api_reading_request - {e}")
@@ -2503,6 +3471,7 @@ def sensors():
                 # Create enhanced sensor dict
                 enhanced_sensor = dict(sensor)  # Copy original sensor data
                 enhanced_sensor['public_key_fingerprint'] = public_key_fingerprint
+                enhanced_sensor['has_key'] = bool(public_key)  # Track if key exists (for older sensors without key_updated_at)
                 enhanced_sensor['min_threshold_effective'] = min_threshold_effective
                 enhanced_sensor['max_threshold_effective'] = max_threshold_effective
                 enhanced_sensor['default_min'] = default_min
@@ -2557,6 +3526,14 @@ def sensors_register():
             device_type = sanitize_input(request.form.get('device_type') or '')
             location = sanitize_input(request.form.get('location') or '')
             
+            # --- FIX STARTS HERE ---
+            # Get status and public_key from the form
+            status = sanitize_input(request.form.get('status') or 'active')
+            public_key = request.form.get('public_key')
+            if public_key:
+                public_key = public_key.strip()
+            # --- FIX ENDS HERE ---
+            
             # Validation
             device_id_valid, device_id_error = validate_device_id(device_id)
             if not device_id_valid:
@@ -2564,11 +3541,13 @@ def sensors_register():
                 return render_template('sensors_register.html', 
                                      sensor_types=list_sensor_types() or [])
             
-            device_type_valid, device_type_error = validate_device_type(device_type)
+            device_type_valid, device_type_error, normalized_device_type = validate_device_type(device_type)
             if not device_type_valid:
                 flash(device_type_error or 'Invalid device type', 'error')
                 return render_template('sensors_register.html',
                                      sensor_types=list_sensor_types() or [])
+            # Use normalized device type (spaces converted to underscores)
+            device_type = normalized_device_type
             
             location_valid, location_error = validate_location(location)
             if not location_valid and location:  # Location can be empty
@@ -2577,26 +3556,35 @@ def sensors_register():
                                      sensor_types=list_sensor_types() or [])
             
             # Check if device_id already exists for this user
-            existing = get_sensor_by_device_id(device_id)
-            if existing and existing.get('user_id') == user_id:
+            existing = get_sensor_by_device_id(device_id, user_id)
+            if existing:
                 flash(f'Sensor with device ID "{device_id}" already registered', 'error')
                 return render_template('sensors_register.html',
                                      sensor_types=list_sensor_types() or [])
             
             # Create sensor
-            sensor_id = create_sensor(
+            # --- FIX: Pass public_key and status to the function ---
+            sensor_created = create_sensor(
                 device_id=device_id,
                 device_type=device_type,
                 location=location or None,
+                public_key=public_key or None,  # NOW PASSING PUBLIC KEY
                 user_id=user_id,
-                status='inactive'  # Start as inactive
+                status=status  # Using status from form
             )
             
-            if sensor_id:
+            if sensor_created:
+                # Sensor created successfully - redirect immediately to avoid duplicate submissions
                 flash(f'Sensor "{device_id}" registered successfully!', 'success')
                 return redirect(url_for('sensors'))
             else:
-                flash('Failed to register sensor', 'error')
+                # create_sensor returned False - could be duplicate or other error
+                # Re-check if sensor exists now (might have been created by concurrent request)
+                verify_existing = get_sensor_by_device_id(device_id, user_id)
+                if verify_existing:
+                    flash(f'Sensor with device ID "{device_id}" already registered', 'error')
+                else:
+                    flash('Failed to register sensor. Please try again.', 'error')
         except Exception as e:
             import traceback
             print(f"ERROR: sensors_register POST - {e}")
@@ -2617,7 +3605,6 @@ def sensors_register():
         print(f"ERROR: sensors_register GET - {e}")
         traceback.print_exc()
         return render_template('sensors_register.html', sensor_types=[])
-
 @app.route('/sensors/delete', methods=['POST'])
 @login_required
 def sensors_delete():
@@ -2632,13 +3619,13 @@ def sensors_delete():
             flash('Device ID is required', 'error')
             return redirect(url_for('sensors'))
         
-        # Verify sensor belongs to user
-        sensor = get_sensor_by_device_id(device_id)
-        if not sensor or sensor.get('user_id') != user_id:
+        # Verify sensor belongs to user (pass user_id to get correct sensor)
+        sensor = get_sensor_by_device_id(device_id, user_id)
+        if not sensor:
             flash('Sensor not found or access denied', 'error')
             return redirect(url_for('sensors'))
         
-        # Delete sensor
+        # Delete sensor (pass user_id if delete function supports it)
         if delete_sensor_by_device_id(device_id):
             # Also delete user's key file if exists
             key_file = get_user_key_file(user_id, device_id)
@@ -2681,9 +3668,9 @@ def sensors_update():
             flash('Device ID is required', 'error')
             return redirect(url_for('sensors'))
         
-        # Verify sensor belongs to user
-        sensor = get_sensor_by_device_id(device_id)
-        if not sensor or sensor.get('user_id') != user_id:
+        # Verify sensor belongs to user (pass user_id to get correct sensor)
+        sensor = get_sensor_by_device_id(device_id, user_id)
+        if not sensor:
             flash('Sensor not found or access denied', 'error')
             return redirect(url_for('sensors'))
         
@@ -2700,38 +3687,79 @@ def sensors_update():
                 flash(status_error or 'Invalid status', 'error')
                 return redirect(url_for('sensors'))
         
-        # Parse thresholds
+        # Parse thresholds (handle empty strings as None)
         min_thresh = None
         max_thresh = None
-        if min_threshold:
+        if min_threshold and str(min_threshold).strip():
             try:
                 min_thresh = float(min_threshold)
-            except ValueError:
+            except (ValueError, TypeError):
                 flash('Invalid minimum threshold', 'error')
                 return redirect(url_for('sensors'))
         
-        if max_threshold:
+        if max_threshold and str(max_threshold).strip():
             try:
                 max_thresh = float(max_threshold)
-            except ValueError:
+            except (ValueError, TypeError):
                 flash('Invalid maximum threshold', 'error')
                 return redirect(url_for('sensors'))
         
-        # Update sensor
-        if update_sensor_by_device_id(
+        # Get public_key from form or keep existing value
+        public_key = request.form.get('public_key', '').strip()
+        if not public_key:
+            # Keep existing public_key if not provided in form
+            public_key = sensor.get('public_key')
+        
+        # Handle "Use default threshold" checkbox
+        # If checkbox is checked (use_default_cb='1'), set thresholds to None to use sensor_type defaults
+        # If unchecked and values provided, use those values
+        # If unchecked but no values, keep existing thresholds
+        use_default_cb = request.form.get('use_default_cb', '0')
+        if use_default_cb == '1':
+            # User wants to use defaults - set to None (database will use sensor_type defaults)
+            min_thresh = None
+            max_thresh = None
+            print(f"DEBUG: sensors_update - Using default thresholds (checkbox checked)", file=sys.stderr)
+        elif min_thresh is None and max_thresh is None:
+            # Checkbox unchecked but no values provided - keep existing thresholds
+            min_thresh = sensor.get('min_threshold')
+            max_thresh = sensor.get('max_threshold')
+            print(f"DEBUG: sensors_update - Keeping existing thresholds: min={min_thresh}, max={max_thresh}", file=sys.stderr)
+        else:
+            # Custom thresholds provided - use them
+            print(f"DEBUG: sensors_update - Using custom thresholds: min={min_thresh}, max={max_thresh}", file=sys.stderr)
+        
+        # Update sensor (pass user_id to ensure we update the correct sensor)
+        print(f"DEBUG: sensors_update - Updating sensor device_id='{device_id}', user_id={user_id}", file=sys.stderr)
+        print(f"DEBUG: sensors_update - min_threshold={min_thresh}, max_threshold={max_thresh}", file=sys.stderr)
+        print(f"DEBUG: sensors_update - location='{location}', status='{status or sensor.get('status')}'", file=sys.stderr)
+        print(f"DEBUG: sensors_update - use_default_cb='{use_default_cb}', existing_min={sensor.get('min_threshold')}, existing_max={sensor.get('max_threshold')}", file=sys.stderr)
+        sys.stderr.flush()
+        
+        update_result = update_sensor_by_device_id(
             device_id=device_id,
             location=location or None,
             status=status or sensor.get('status'),
+            public_key=public_key,
             min_threshold=min_thresh,
-            max_threshold=max_thresh
-        ):
+            max_threshold=max_thresh,
+            user_id=user_id
+        )
+        
+        if update_result:
+            print(f"DEBUG: sensors_update - ✅ Update successful for device_id='{device_id}'", file=sys.stderr)
+            sys.stderr.flush()
             flash(f'Sensor "{device_id}" updated successfully', 'success')
         else:
-            flash('Failed to update sensor', 'error')
+            print(f"DEBUG: sensors_update - ❌ Update failed for device_id='{device_id}' (update_sensor_by_device_id returned False)", file=sys.stderr)
+            sys.stderr.flush()
+            flash('Failed to update sensor. Check server logs for details.', 'error')
     except Exception as e:
         import traceback
-        print(f"ERROR: sensors_update - {e}")
-        traceback.print_exc()
+        error_msg = f"ERROR: sensors_update - {e}"
+        print(error_msg, file=sys.stderr)
+        print(traceback.format_exc(), file=sys.stderr)
+        sys.stderr.flush()
         flash(f'Error updating sensor: {str(e)}', 'error')
     
     return redirect(url_for('sensors'))
@@ -2871,23 +3899,25 @@ def api_key_upload_status():
         # Check if key exists in user's keys
         key = get_user_key(user_id, device_id)
         if key:
-            return jsonify({"status": "uploaded", "device_id": device_id})
+            # FIX: Added 'received': True
+            return jsonify({"status": "uploaded", "received": True, "device_id": device_id})
         
         # Check pending keys
         if user_id in user_pending_keys and device_id in user_pending_keys[user_id]:
-            return jsonify({"status": "pending", "device_id": device_id})
+            # FIX: Added 'received': True
+            return jsonify({"status": "pending", "received": True, "device_id": device_id})
         
         # Check global pending keys (legacy)
         if device_id in pending_keys:
-            return jsonify({"status": "pending", "device_id": device_id})
+            # FIX: Added 'received': True
+            return jsonify({"status": "pending", "received": True, "device_id": device_id})
         
-        return jsonify({"status": "not_found", "device_id": device_id})
+        return jsonify({"status": "not_found", "received": False, "device_id": device_id})
     except Exception as e:
         import traceback
         print(f"ERROR: api_key_upload_status - {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-
 @app.route('/api/key_upload_fetch')
 @login_required
 def api_key_upload_fetch():
@@ -2904,9 +3934,9 @@ def api_key_upload_fetch():
         # Get key from user's keys
         key = get_user_key(user_id, device_id)
         if key:
-            # Save to database if sensor exists
-            sensor = get_sensor_by_device_id(device_id)
-            if sensor and sensor.get('user_id') == user_id:
+            # Save to database if sensor exists (pass user_id to get correct sensor)
+            sensor = get_sensor_by_device_id(device_id, user_id)
+            if sensor:
                 try:
                     update_sensor_by_device_id(
                         device_id=device_id,
@@ -2914,7 +3944,8 @@ def api_key_upload_fetch():
                         status=sensor.get('status'),
                         public_key=key,
                         min_threshold=sensor.get('min_threshold'),
-                        max_threshold=sensor.get('max_threshold')
+                        max_threshold=sensor.get('max_threshold'),
+                        user_id=user_id
                     )
                 except Exception:
                     pass
@@ -2941,6 +3972,136 @@ def api_key_upload_fetch():
         print(f"ERROR: api_key_upload_fetch - {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/sensor/key_timestamp')
+@login_required
+def api_sensor_key_timestamp():
+    """API endpoint to get the key_updated_at timestamp for a sensor."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({"error": "User session not found"}), 401
+    
+    try:
+        device_id = sanitize_input(request.args.get('device_id') or '')
+        if not device_id:
+            return jsonify({"error": "device_id parameter is required"}), 400
+        
+        # Get sensor from database (with user_id to ensure correct sensor)
+        sensor = get_sensor_by_device_id(device_id, user_id)
+        if not sensor:
+            return jsonify({"error": "Sensor not found"}), 404
+        
+        # Get key_updated_at and has_key status
+        key_updated_at = sensor.get('key_updated_at')
+        public_key = sensor.get('public_key')
+        has_key = bool(public_key)
+        
+        # Also check file system as fallback
+        if not has_key:
+            try:
+                file_key = get_user_key(user_id, device_id)
+                has_key = bool(file_key)
+                if file_key:
+                    public_key = file_key
+            except Exception:
+                pass
+        
+        # Compute fingerprint if key exists
+        fingerprint = None
+        if public_key:
+            try:
+                fingerprint = compute_public_key_fingerprint(public_key)
+            except Exception:
+                pass
+        
+        return jsonify({
+            "device_id": device_id,
+            "key_updated_at": key_updated_at.strftime('%Y-%m-%d %H:%M:%S') if key_updated_at else None,
+            "has_key": has_key,
+            "fingerprint": fingerprint
+        })
+    except Exception as e:
+        import traceback
+        print(f"ERROR: api_sensor_key_timestamp - {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/test/env', methods=['GET'])
+@login_required
+def test_env_vars():
+    """Test endpoint to check if environment variables are accessible."""
+    import os
+    return jsonify({
+        "MQTT_HOST": os.environ.get('MQTT_HOST', 'NOT SET'),
+        "MQTT_USER": os.environ.get('MQTT_USER', 'NOT SET'),
+        "MQTT_PASSWORD": "SET" if os.environ.get('MQTT_PASSWORD') else "NOT SET",
+        "MQTT_PORT": os.environ.get('MQTT_PORT', 'NOT SET'),
+        "MQTT_USE_TLS": os.environ.get('MQTT_USE_TLS', 'NOT SET'),
+        "MQTT_TLS_INSECURE": os.environ.get('MQTT_TLS_INSECURE', 'NOT SET'),
+    })
+
+@app.route('/api/test/mqtt', methods=['GET'])
+@login_required
+def test_mqtt_config():
+    """Test endpoint to check MQTT configuration."""
+    mqtt_host = os.environ.get('MQTT_HOST')
+    mqtt_port = os.environ.get('MQTT_PORT', '1883')
+    mqtt_user = os.environ.get('MQTT_USER')
+    mqtt_use_tls = os.environ.get('MQTT_USE_TLS', 'false').lower() in ('true', '1', 'yes')
+    
+    config = {
+        "mqtt_host": mqtt_host or "NOT SET",
+        "mqtt_port": mqtt_port,
+        "mqtt_user": mqtt_user or "NOT SET",
+        "mqtt_use_tls": mqtt_use_tls,
+        "configured": bool(mqtt_host)
+    }
+    
+    # Test if paho-mqtt is available
+    try:
+        import paho.mqtt.publish as publish
+        config["paho_mqtt_available"] = True
+    except ImportError:
+        config["paho_mqtt_available"] = False
+        config["error"] = "paho-mqtt library not installed"
+    
+    # Test publish_kwargs generation
+    if mqtt_host:
+        try:
+            publish_kwargs = _get_mqtt_publish_kwargs()
+            config["publish_kwargs"] = {
+                "hostname": publish_kwargs.get('hostname'),
+                "port": publish_kwargs.get('port'),
+                "has_auth": 'auth' in publish_kwargs,
+                "has_tls": 'tls' in publish_kwargs,
+                "auth_username": publish_kwargs.get('auth', {}).get('username') if 'auth' in publish_kwargs else None
+            }
+            
+            # Test actual publish - test BOTH request and update topics
+            try:
+                import paho.mqtt.publish as publish
+                # Test request topic (this one works)
+                test_topic_request = "provision/test_publish/request"
+                test_payload = '{"device_id":"test_publish","action":"request","user_id":"0"}'
+                publish.single(test_topic_request, test_payload, qos=1, **publish_kwargs)
+                config["test_publish_request"] = "SUCCESS"
+                
+                # Test update topic (this is what fails in provision endpoint)
+                test_topic_update = "provision/test_publish/update"
+                publish.single(test_topic_update, test_payload, qos=1, **publish_kwargs)
+                config["test_publish_update"] = "SUCCESS"
+                config["test_publish"] = "SUCCESS (both topics)"
+            except Exception as pub_err:
+                error_str = str(pub_err)
+                if "test_publish_request" not in config:
+                    config["test_publish_request"] = f"FAILED: {error_str}"
+                if "test_publish_update" not in config:
+                    config["test_publish_update"] = f"FAILED: {error_str}"
+                config["test_publish"] = f"FAILED: {error_str}"
+        except Exception as e:
+            config["publish_kwargs_error"] = str(e)
+    
+    return jsonify(config)
 
 @app.route('/test-db', methods=['GET'])
 def test_db_connection():
@@ -3032,7 +4193,9 @@ if __name__ == '__main__':
     # Start MQTT key subscriber if configured
     start_mqtt_key_subscriber()
     
-    host = os.environ.get('FLASK_HOST', '127.0.0.1')
+    # Default to 0.0.0.0 to accept connections from network (not just localhost)
+    # Set FLASK_HOST=127.0.0.1 in environment if you want localhost-only
+    host = os.environ.get('FLASK_HOST', '0.0.0.0')
     port = int(os.environ.get('FLASK_RUN_PORT', os.environ.get('PORT', '5000')))
     debug_env = str(os.environ.get('FLASK_DEBUG', '0')).lower() in ('1', 'true', 'yes')
     app.run(host=host, port=port, debug=debug_env, use_reloader=debug_env)

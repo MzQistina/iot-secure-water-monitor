@@ -40,19 +40,61 @@
             margin-bottom: 28px;
         }
 
-        .intro-box .btn {
-            background-color: #2a4d69;
-            color: white;
-            border: none;
-            padding: 14px 26px;
-            border-radius: 8px;
-            font-size: 1rem;
-            cursor: pointer;
-            transition: background 0.3s ease;
+        @keyframes rotate {
+            100% {
+                transform: rotate(1turn);
+            }
         }
 
-        .intro-box .btn:hover {
-            background-color: #1e3b52;
+        .rainbow {
+            position: relative;
+            z-index: 0;
+            background: rgba(255, 255, 255, 0.15);
+            overflow: hidden;
+            padding: 2px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9999px;
+            transition: transform 0.3s ease;
+        }
+
+        .rainbow:hover {
+            transform: scale(1.05);
+        }
+
+        .rainbow:active {
+            transform: scale(1);
+        }
+
+        .rainbow::before {
+            content: '';
+            position: absolute;
+            z-index: -2;
+            left: -50%;
+            top: -50%;
+            width: 200%;
+            height: 200%;
+            background-position: 100% 50%;
+            background-repeat: no-repeat;
+            background-size: 50% 30%;
+            filter: blur(6px);
+            background-image: linear-gradient(90deg, #ff0000, #ff7f00, #ffff00, #00ff00, #0000ff, #4b0082, #9400d3, #ff0000);
+            animation: rotate 4s linear infinite;
+        }
+
+        .intro-box .btn {
+            padding: 12px 32px;
+            font-size: 0.875rem;
+            color: white;
+            border-radius: 9999px;
+            font-weight: 500;
+            background: rgba(17, 24, 39, 0.95);
+            backdrop-filter: blur(8px);
+            border: none;
+            cursor: pointer;
+            width: 100%;
+            text-align: center;
         }
 
         @media (max-width: 800px) {
@@ -77,8 +119,10 @@
         <p>
             Monitor water quality in real time with secure IoT integration. This system helps ensure safe drinking water by analyzing TDS, pH, and turbidity levels efficiently.
         </p>
-<a href="{{ url_for('login') }}">
-    <button class="btn">Get Started</button>
+<a href="{{ url_for('login') }}" style="text-decoration: none; display: inline-block; width: 100%;">
+    <div class="rainbow">
+        <button class="btn">Get Started</button>
+    </div>
 </a>
     </div>
 </body>

@@ -66,18 +66,30 @@ Should output: `Syntax OK`
 
 ### Step 5: Restart Apache
 
-**Restart Apache service:**
-```cmd
-# Stop Apache
-net stop Apache2.4
+**⚠️ IMPORTANT: You must run PowerShell/Command Prompt as Administrator to restart Apache!**
 
-# Start Apache
+**Option 1: Using PowerShell (as Administrator):**
+```powershell
+# Right-click PowerShell → "Run as Administrator", then:
+Restart-Service Apache2.4
+```
+
+**Option 2: Using Command Prompt (as Administrator):**
+```cmd
+# Right-click Command Prompt → "Run as Administrator", then:
+net stop Apache2.4
 net start Apache2.4
 ```
 
-**Or use the Apache Monitor:**
+**Option 3: Using Apache Monitor:**
+- Open: `C:\Apache24\bin\ApacheMonitor.exe`
 - Right-click Apache icon in system tray
 - Click "Restart"
+- Note: May still require administrator privileges
+
+**If you get "Access is denied" or "Cannot open service" error:**
+- You need to run PowerShell/CMD as Administrator
+- Press Win+X → Select "Windows PowerShell (Admin)" or "Terminal (Admin)"
 
 ### Step 6: Verify Environment Variables
 
@@ -167,4 +179,24 @@ MQTT: connected rc=0; subscribed to 'keys/+/public'
 - Verify provision agent is running on Raspbian
 - Check MQTT topics match: `keys/+/public`
 - Check Apache logs for MQTT subscription messages
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

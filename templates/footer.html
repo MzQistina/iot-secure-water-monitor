@@ -21,14 +21,17 @@
         padding: 20px;
         color: var(--text-secondary, #6c757d);
         font-size: 0.9rem;
-        transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+        transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, left 0.3s ease;
         position: fixed;
         bottom: 0;
-        left: 0;
+        left: var(--sidebar-width, 240px); /* Start after sidebar on desktop */
         right: 0;
         z-index: 100;
-        width: 100%;
+        width: auto;
         margin-top: auto;
+    }
+    body.sidebar-collapsed #app-footer {
+        left: 0;
     }
     .footer-content {
         max-width: 1400px;
@@ -63,39 +66,184 @@
         text-align: center;
         transition: color 0.3s ease;
     }
+    /* Tablet and Medium Screens */
+    @media (max-width: 1024px) {
+        #app-footer {
+            left: var(--sidebar-width, 220px);
+        }
+        body.sidebar-collapsed #app-footer {
+            left: 0;
+        }
+    }
+    
+    /* Mobile and Small Tablets */
     @media (max-width: 900px) {
         #app-footer {
+            left: 0 !important; /* Full width on mobile */
             margin-left: 0;
+        }
+        body.sidebar-collapsed #app-footer {
+            left: 0 !important;
         }
         .footer-content {
             flex-direction: column;
             text-align: center;
+            gap: 12px;
         }
         .footer-copyright {
             text-align: center;
         }
     }
+    
+    /* Small Mobile */
     @media (max-width: 600px) {
         #app-footer {
-            padding: 16px;
+            padding: 16px 12px;
         }
         .footer-content {
-            gap: 12px;
+            gap: 10px;
         }
         .footer-section {
             min-width: auto;
             width: 100%;
         }
+        .footer-brand {
+            font-size: 0.95rem;
+        }
+        .footer-text,
+        .footer-copyright {
+            font-size: 0.8rem;
+        }
+    }
+    
+    /* Extra Small Mobile */
+    @media (max-width: 400px) {
+        #app-footer {
+            padding: 12px 10px;
+        }
+        .footer-content {
+            gap: 8px;
+        }
+        .footer-brand {
+            font-size: 0.9rem;
+        }
+        .footer-text,
+        .footer-copyright {
+            font-size: 0.75rem;
+        }
     }
 </style>
 <script>
-    // Update copyright year dynamically
+    // Suppress browser extension message passing errors
+    // These errors occur when browser extensions try to communicate with the page
+    // but the message channel closes before a response is received
     (function() {
-        const copyrightElements = document.querySelectorAll('.footer-copyright');
-        const currentYear = new Date().getFullYear();
-        copyrightElements.forEach(function(el) {
-            el.textContent = el.textContent.replace(/\d{4}/, currentYear);
+        window.addEventListener('error', function(event) {
+            if (event.message && event.message.includes('message channel closed')) {
+                event.preventDefault();
+                return false;
+            }
+        }, true);
+        
+        window.addEventListener('unhandledrejection', function(event) {
+            if (event.reason && event.reason.message && 
+                event.reason.message.includes('message channel closed')) {
+                event.preventDefault();
+                return false;
+            }
         });
     })();
-</script>
+    
+    // Update copyright year and handle body padding
+    (function() {
+        // Update year
+        const copyrightElements = document.querySelectorAll('.copyright-year');
+        const currentYear = new Date().getFullYear();
+        copyrightElements.forEach(function(el) {
+            if (el.textContent !== currentYear.toString()) {
+                el.textContent = currentYear;
+            }
+        });
 
+        // Automatically add padding to body so content isn't covered by fixed footer
+        function adjustBodyPadding() {
+            const footer = document.getElementById('app-footer');
+            if (footer) {
+                const height = footer.offsetHeight;
+                // Add footer height + 20px extra space to body padding
+                const currentPadding = parseInt(window.getComputedStyle(document.body).paddingBottom) || 0;
+                const newPadding = height + 20;
+                if (currentPadding !== newPadding) {
+                    document.body.style.paddingBottom = newPadding + 'px';
+                }
+            }
+        }
+
+        // Sync footer position with sidebar state
+        function syncFooterWithSidebar() {
+            const footer = document.getElementById('app-footer');
+            const body = document.body;
+            const isMobile = window.innerWidth <= 900;
+            
+            if (!footer) return;
+            
+            // On mobile, footer is always full width
+            if (isMobile) {
+                footer.style.left = '0';
+            } else {
+                // On desktop, adjust based on sidebar state
+                if (body.classList.contains('sidebar-collapsed')) {
+                    footer.style.left = '0';
+                } else {
+                    // Get sidebar width from CSS variable
+                    const sidebarWidth = getComputedStyle(document.documentElement)
+                        .getPropertyValue('--sidebar-width')
+                        .trim() || '240px';
+                    footer.style.left = sidebarWidth;
+                }
+            }
+        }
+
+        // Adjust on load and resize
+        window.addEventListener('load', function() {
+            adjustBodyPadding();
+            syncFooterWithSidebar();
+        });
+        
+        // Debounced resize handler
+        let resizeTimeout;
+        window.addEventListener('resize', function() {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(function() {
+                adjustBodyPadding();
+                syncFooterWithSidebar();
+            }, 150);
+        });
+        
+        // Run immediately to catch dynamic content changes
+        adjustBodyPadding();
+        syncFooterWithSidebar();
+        
+        // Watch for sidebar state changes
+        const observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                if (mutation.type === 'attributes' && mutation.attributeName === 'class') {
+                    syncFooterWithSidebar();
+                }
+            });
+        });
+        
+        // Observe body class changes
+        if (document.body) {
+            observer.observe(document.body, {
+                attributes: true,
+                attributeFilter: ['class']
+            });
+        }
+        
+        // Optional: Re-check periodically in case content loads slowly
+        setInterval(function() {
+            adjustBodyPadding();
+        }, 1000);
+    })();
+</script>

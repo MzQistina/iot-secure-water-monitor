@@ -73,12 +73,17 @@ class DeviceSessionManager:
         url = f"{self.server_url}/api/device/session/request"
         params = {"device_id": self.device_id}
         
-        response = requests.get(url, params=params, timeout=10)
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to request challenge: {response.status_code} - {response.text}")
-        
-        return response.json()
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to request challenge: {response.status_code} - {response.text}")
+            
+            return response.json()
+        except requests.exceptions.ConnectTimeout:
+            raise Exception(f"Connection timeout: Server at {self.server_url} is not responding. Check if server is running and accessible.")
+        except requests.exceptions.ConnectionError as e:
+            raise Exception(f"Connection error: Cannot reach server at {self.server_url}. Error: {e}")
     
     def establish_session(self, challenge_id: str, challenge: str) -> dict:
         """Establish a session by signing the challenge."""
@@ -91,19 +96,24 @@ class DeviceSessionManager:
             "signature": signature
         }
         
-        response = requests.post(url, json=payload, timeout=10)
-        
-        if response.status_code != 200:
-            raise Exception(f"Failed to establish session: {response.status_code} - {response.text}")
-        
-        data = response.json()
-        with self.lock:
-            self.session_token = data.get('session_token')
-            expires_in = data.get('expires_in_seconds', 900)
-            self.session_expires_at = time.time() + expires_in
-            self.counter = 0
-        
-        return data
+        try:
+            response = requests.post(url, json=payload, timeout=10)
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to establish session: {response.status_code} - {response.text}")
+            
+            data = response.json()
+            with self.lock:
+                self.session_token = data.get('session_token')
+                expires_in = data.get('expires_in_seconds', 900)
+                self.session_expires_at = time.time() + expires_in
+                self.counter = 0
+            
+            return data
+        except requests.exceptions.ConnectTimeout:
+            raise Exception(f"Connection timeout: Server at {self.server_url} is not responding.")
+        except requests.exceptions.ConnectionError as e:
+            raise Exception(f"Connection error: Cannot reach server at {self.server_url}. Error: {e}")
     
     def ensure_session(self) -> bool:
         """Ensure we have a valid session, establishing one if needed."""
@@ -112,17 +122,30 @@ class DeviceSessionManager:
                 if time.time() < self.session_expires_at - 60:  # Renew if expires in < 1 minute
                     return True
         
-        # Need to establish new session
-        try:
-            challenge_data = self.request_challenge()
-            self.establish_session(
-                challenge_data['challenge_id'],
-                challenge_data['challenge']
-            )
-            return True
-        except Exception as e:
-            print(f"[{self._get_display_id()}] ❌ Failed to establish session: {e}")
-            return False
+        # Need to establish new session - retry with exponential backoff
+        max_retries = 3
+        base_delay = 0.5  # Start with 0.5 seconds
+        
+        for attempt in range(max_retries):
+            try:
+                challenge_data = self.request_challenge()
+                self.establish_session(
+                    challenge_data['challenge_id'],
+                    challenge_data['challenge']
+                )
+                return True
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 0.5s, 1s, 2s
+                    delay = base_delay * (2 ** attempt)
+                    print(f"[{self._get_display_id()}] ⚠️  Session establishment failed (attempt {attempt + 1}/{max_retries}), retrying in {delay:.1f}s...")
+                    time.sleep(delay)
+                else:
+                    # Last attempt failed
+                    print(f"[{self._get_display_id()}] ❌ Failed to establish session after {max_retries} attempts: {e}")
+                    return False
+        
+        return False
     
     def submit_reading(self, sensor_data: dict) -> bool:
         """Submit sensor reading with session token."""
@@ -173,7 +196,12 @@ class DeviceSessionManager:
                 print(f"[{self._get_display_id()}] ✅ Reading #{current_counter} submitted - {safe_status}")
                 return True
             else:
-                print(f"[{self._get_display_id()}] ❌ Failed: {response.status_code} - {response.text[:100]}")
+                error_text = response.text[:200] if response.text else "No error message"
+                print(f"[{self._get_display_id()}] ❌ Failed: {response.status_code} - {error_text}")
+                # Check for device_type mismatch error specifically
+                if "device_type mismatch" in error_text.lower():
+                    print(f"[{self._get_display_id()}] 💡 Tip: Check that device_type in database matches the sensor type")
+                    print(f"[{self._get_display_id()}]    Payload device_type: {sensor_data.get('device_type', 'N/A')}")
                 # If session error, clear session to force re-establishment
                 if response.status_code == 401:
                     with self.lock:
@@ -210,9 +238,11 @@ def read_sensor_data(device_id: str, device_type: str, location: Optional[str] =
     import random
     
     # Base data structure
+    # Normalize device_type to lowercase and strip whitespace to match server validation
+    normalized_device_type = str(device_type).lower().strip()
     data = {
         "device_id": device_id,
-        "device_type": device_type.lower(),
+        "device_type": normalized_device_type,
     }
     
     # Add location if provided (from server)
@@ -314,6 +344,25 @@ def find_private_key(device_id: str, base_dir: str, user_id: Optional[str] = Non
     return None
 
 
+def normalize_device_type(device_type: str) -> str:
+    """Normalize device_type to match database format (lowercase, no spaces)."""
+    if not device_type:
+        return "ph"  # default
+    normalized = str(device_type).lower().strip()
+    # Handle common variations
+    type_mapping = {
+        "cond": "conductivity",
+        "nitr": "nitrate",  # Will be handled by inference logic
+        "chlor": "chlorine",
+        "sal": "salinity",
+    }
+    # Check if it's a partial match that should be expanded
+    for partial, full in type_mapping.items():
+        if normalized.startswith(partial) and len(normalized) <= len(partial) + 2:
+            return full
+    return normalized
+
+
 def get_device_info(device_id: str, base_dir: str, user_id: Optional[str] = None) -> Optional[dict]:
     """Get device information by checking for private key."""
     private_key_path = find_private_key(device_id, base_dir, user_id)
@@ -325,7 +374,29 @@ def get_device_info(device_id: str, base_dir: str, user_id: Optional[str] = None
     device_type = "ph"  # default
     device_id_lower = device_id.lower()
     
-    if "ph" in device_id_lower:
+    # Check for more specific patterns first to avoid false matches
+    # Handle both full names and common abbreviations (e.g., "nit01", "con01", "ch01")
+    # Order matters: check most specific/shortest patterns first
+    
+    # Check for nitrate/nitrite first (before other checks that might match "nit")
+    if device_id_lower.startswith("nit"):
+        # Short form like "nit01" - assume nitrate (more common than nitrite)
+        if "nitrite" in device_id_lower:
+            device_type = "nitrite"
+        else:
+            device_type = "nitrate"
+    # Check for conductivity (before other checks that might match "con")
+    elif device_id_lower.startswith("con"):
+        # Short form like "con01" - assume conductivity
+        device_type = "conductivity"
+    # Check for chlorine (before "ph" check to avoid false matches)
+    elif device_id_lower.startswith("ch") and len(device_id_lower) <= 4:
+        # Short form like "ch01" - assume chlorine
+        device_type = "chlorine"
+    elif "chlor" in device_id_lower or "chlorine" in device_id_lower:
+        device_type = "chlorine"
+    # Check for pH (but not if it's chlorine)
+    elif "ph" in device_id_lower and "chlor" not in device_id_lower and not device_id_lower.startswith("ch"):
         device_type = "ph"
     elif "tds" in device_id_lower:
         device_type = "tds"
@@ -342,25 +413,60 @@ def get_device_info(device_id: str, base_dir: str, user_id: Optional[str] = None
     elif "pres" in device_id_lower or "pressure" in device_id_lower:
         device_type = "pressure"
     elif "nitr" in device_id_lower:
-        # Check for nitrate vs nitrite (nitrate is more common)
+        # Full form like "nitrate" or "nitrite"
         if "nitrite" in device_id_lower:
             device_type = "nitrite"
         else:
             device_type = "nitrate"
     elif "orp" in device_id_lower:
         device_type = "orp"
-    elif "chlor" in device_id_lower or "chlorine" in device_id_lower:
-        device_type = "chlorine"
     elif "sal" in device_id_lower or "salinity" in device_id_lower:
         device_type = "salinity"
     elif "flow" in device_id_lower:
         device_type = "flow"
     
+    # Normalize the inferred device_type
+    normalized_type = normalize_device_type(device_type)
+    
     return {
         "device_id": device_id,
-        "device_type": device_type,
+        "device_type": normalized_type,
         "private_key_path": private_key_path
     }
+
+
+def check_server_connectivity(server_url: str) -> bool:
+    """Check if server is reachable and provide helpful diagnostics."""
+    try:
+        # Try to connect to a simple endpoint
+        url = f"{server_url}/api/public/active_sensors"
+        response = requests.get(url, timeout=5)
+        return True  # Even if 404, server is reachable
+    except requests.exceptions.ConnectTimeout:
+        print(f"\n❌ Connection timeout: Cannot reach server at {server_url}")
+        print("\n🔍 Troubleshooting steps:")
+        print(f"   1. Verify the server is running: Open {server_url} in a browser")
+        print(f"   2. Check the IP address is correct (not 10.0.2.2 for physical Pi)")
+        print(f"   3. Test connectivity: ping <server_ip>")
+        print(f"   4. Check firewall settings on the server")
+        print(f"   5. Verify server is listening on the correct port (default: 5000)")
+        return False
+    except requests.exceptions.ConnectionError as e:
+        print(f"\n❌ Connection error: Cannot reach server at {server_url}")
+        print(f"   Error: {e}")
+        print("\n🔍 Troubleshooting steps:")
+        print(f"   1. Verify the server is running: Open {server_url} in a browser")
+        print(f"   2. Check the IP address is correct")
+        if "10.0.2.2" in server_url:
+            print(f"   ⚠️  Note: 10.0.2.2 is typically a VirtualBox NAT IP.")
+            print(f"      For a physical Raspberry Pi, use your Windows server's actual IP")
+            print(f"      (e.g., 192.168.43.196 or your network's server IP)")
+        print(f"   3. Test connectivity: ping <server_ip>")
+        print(f"   4. Check firewall settings on the server")
+        return False
+    except Exception as e:
+        print(f"⚠️  Warning: Could not verify server connectivity: {e}")
+        return False
 
 
 def fetch_active_sensors_from_server(server_url: str) -> List[dict]:
@@ -372,13 +478,19 @@ def fetch_active_sensors_from_server(server_url: str) -> List[dict]:
         
         if response.status_code == 200:
             data = response.json()
-            return data.get('active_sensors', [])
+            sensors = data.get('active_sensors', [])
+            if sensors:
+                print(f"✅ Fetched {len(sensors)} sensors from server (public endpoint)")
+            return sensors
         elif response.status_code == 404:
-            # Fallback: try authenticated endpoint (will fail but we'll handle it)
+            # Public endpoint doesn't exist - that's okay, we'll use local keys
             pass
     except Exception as e:
-        print(f"⚠️  Warning: Could not fetch active sensors from server: {e}")
+        # Public endpoint might not be available - that's okay
+        pass
     
+    # Public endpoint returns empty or doesn't exist
+    # This is expected - we'll infer device_type from device_id or use local keys
     return []
 
 
@@ -413,9 +525,22 @@ def find_available_sensors(base_dir: str, server_url: Optional[str] = None, loca
             if private_key_path:
                 device_info = get_device_info(device_id, base_dir, user_id)
                 if device_info:
-                    # Merge server data
+                    # Merge server data - ALWAYS use server's device_type if provided
+                    # This ensures we match what's in the database
+                    server_device_type = server_sensor.get("device_type")
+                    if server_device_type:
+                        # Normalize device_type to match database format
+                        normalized_server_type = normalize_device_type(server_device_type)
+                        device_info["device_type"] = normalized_server_type
+                        print(f"   Using server device_type '{normalized_server_type}' for {device_id}")
+                    else:
+                        # If server doesn't provide device_type, normalize the inferred one
+                        inferred_type = device_info.get("device_type", "ph")
+                        normalized_inferred = normalize_device_type(inferred_type)
+                        device_info["device_type"] = normalized_inferred
+                        print(f"   ⚠️  Server didn't provide device_type for {device_id}, using inferred: '{normalized_inferred}'")
+                        print(f"   💡 Tip: Ensure device_type in database matches '{normalized_inferred}' for {device_id}")
                     device_info["location"] = server_sensor.get("location")
-                    device_info["device_type"] = server_sensor.get("device_type", device_info["device_type"])
                     device_info["status"] = "active"
                     if user_id:
                         device_info["user_id"] = user_id
@@ -483,14 +608,20 @@ def simulate_sensor(device_info: dict, server_url: str, interval: int, stop_even
     location_str = f", location: {location}" if location else ""
     user_str = f", user_id: {user_id}" if user_id else ""
     mode_str = f", mode: {mode}" if mode != "safe" else ""
-    print(f"[{display_id}] Starting simulation (type: {device_type}, interval: {interval}s{location_str}{user_str}{mode_str})")
+    # Normalize device_type for display and ensure consistency
+    normalized_type = str(device_type).lower().strip()
+    print(f"[{display_id}] Starting simulation (type: {normalized_type}, interval: {interval}s{location_str}{user_str}{mode_str})")
     
     while not stop_event.is_set():
         try:
-            sensor_data = read_sensor_data(device_id, device_type, location, mode=mode)
+            # Ensure device_type is normalized before generating data
+            normalized_type = str(device_type).lower().strip()
+            sensor_data = read_sensor_data(device_id, normalized_type, location, mode=mode)
             session_mgr.submit_reading(sensor_data)
         except Exception as e:
             print(f"[{device_id}] ❌ Error: {e}")
+            import traceback
+            print(f"[{device_id}] Error details: {traceback.format_exc()}")
         
         # Wait for interval or until stop event
         stop_event.wait(timeout=interval)
@@ -540,6 +671,13 @@ Examples:
     
     base_dir = os.path.dirname(__file__)
     server_url = args.server_url.rstrip('/')
+    
+    # Check server connectivity first
+    print(f"🔍 Checking server connectivity: {server_url}...")
+    if not check_server_connectivity(server_url):
+        print("\n❌ Cannot connect to server. Please fix the connection issue and try again.")
+        sys.exit(1)
+    print(f"✅ Server is reachable\n")
     
     # Find available sensors (checks server for active sensors)
     location_filter = args.location.strip() if args.location else None
@@ -600,7 +738,7 @@ Examples:
     # Group sensors by location
     sensors_by_location = {}
     for sensor in selected_sensors:
-        loc = sensor.get("location", "Unknown")
+        loc = sensor.get("location") or "Unassigned"  # Handle None location
         if loc not in sensors_by_location:
             sensors_by_location[loc] = []
         sensors_by_location[loc].append(sensor["device_id"])
@@ -620,7 +758,9 @@ Examples:
     if location_filter:
         print(f"Location filter: {location_filter}")
     else:
-        print(f"Locations: {', '.join(sensors_by_location.keys())}")
+        # Convert location keys to strings (handle None values)
+        location_keys = [str(loc) if loc else "Unassigned" for loc in sensors_by_location.keys()]
+        print(f"Locations: {', '.join(location_keys)}")
     print(f"Interval: {args.interval} seconds")
     print(f"Mode: {args.mode}")
     print(f"Total sensors: {len(selected_sensors)}")
@@ -629,15 +769,17 @@ Examples:
     if not location_filter and len(sensors_by_location) > 1:
         print("\n⚠️  Note: Sensors from multiple locations detected.")
         print("   Use --location <location_name> to simulate one location at a time.")
-        print(f"   Available locations: {', '.join(sensors_by_location.keys())}\n")
+        # Convert location keys to strings (handle None values)
+        location_keys = [str(loc) if loc else "Unassigned" for loc in sensors_by_location.keys()]
+        print(f"   Available locations: {', '.join(location_keys)}\n")
     print("\nStarting simulation (Press Ctrl+C to stop)...\n")
     
     # Create stop event for graceful shutdown
     stop_event = threading.Event()
     
-    # Start a thread for each sensor
+    # Start a thread for each sensor with staggered delays to avoid connection storms
     threads = []
-    for device_info in selected_sensors:
+    for idx, device_info in enumerate(selected_sensors):
         thread = threading.Thread(
             target=simulate_sensor,
             args=(device_info, server_url, args.interval, stop_event, args.mode),
@@ -645,6 +787,10 @@ Examples:
         )
         thread.start()
         threads.append(thread)
+        # Stagger thread starts by 0.2 seconds to reduce database/network contention
+        # This helps prevent first-attempt failures when many sensors start simultaneously
+        if idx < len(selected_sensors) - 1:  # Don't delay after the last sensor
+            time.sleep(0.2)
     
     try:
         # Wait for all threads (they run until stop_event is set)

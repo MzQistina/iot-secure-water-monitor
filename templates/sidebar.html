@@ -41,7 +41,7 @@
             <span class="toggle-slider"></span>
         </label>
     </div>
-    <a class="nav-link logout-btn" href="{{ url_for('logout') }}">Logout</a>
+    <a class="nav-link logout-btn" href="{{ url_for('logout') }}" onclick="event.preventDefault(); handleLogout(this); return false;">Logout</a>
 </nav>
 <style>
     :root {
@@ -93,7 +93,13 @@
         box-sizing: border-box;
         z-index: 1000;
         border-right: 1px solid rgba(255,255,255,0.1);
-        transition: background-color 0.3s ease;
+        transition: transform 0.3s ease, background-color 0.3s ease;
+        overflow-y: auto;
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+    }
+    .sidebar.collapsed {
+        transform: translateX(-100%);
     }
     :root { --header-h: 56px; }
     #app-header { 
@@ -105,8 +111,22 @@
         z-index: 950;
         transition: background-color 0.3s ease, border-color 0.3s ease;
     }
-    #app-header .header-inner { height: 100%; display:flex; align-items:center; gap: 12px; padding: 0 14px; }
-    #app-header .header-brand { font-weight: 700; color: var(--text-primary); transition: color 0.3s ease; }
+    #app-header .header-inner { 
+        height: 100%; 
+        display:flex; 
+        align-items:center; 
+        gap: 12px; 
+        padding: 0 14px; 
+    }
+    #app-header .header-brand { 
+        font-weight: 700; 
+        color: var(--text-primary); 
+        transition: color 0.3s ease; 
+        font-size: 1.1rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
     body {
         background-color: var(--bg-primary);
         color: var(--text-primary);
@@ -114,16 +134,45 @@
     }
     
     #menu-toggle { 
-        display:none; 
+        display:inline-block; 
         margin-left: auto; 
         background:var(--sidebar-bg); 
         color:#fff; 
         border:none; 
         padding:8px 10px; 
         border-radius:8px;
-        transition: background-color 0.3s ease;
+        transition: background-color 0.3s ease, transform 0.2s ease;
+        cursor: pointer;
+        font-size: 1.2rem;
+        min-width: 44px;
+        min-height: 44px;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
     }
-    #sidebar-backdrop { display:none; position:fixed; inset:0; background: rgba(0,0,0,0.35); z-index:900; }
+    #menu-toggle:hover {
+        background: var(--sidebar-active);
+    }
+    #menu-toggle:active {
+        transform: scale(0.95);
+    }
+    #sidebar-backdrop { 
+        display:none; 
+        position:fixed; 
+        inset:0; 
+        background: rgba(0,0,0,0.35); 
+        z-index:900; 
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+    #sidebar-backdrop.active { 
+        display:block; 
+        opacity: 1;
+    }
+    @media (max-width: 900px) {
+        #sidebar-backdrop.active {
+            display: block;
+        }
+    }
     .dark-mode-toggle-wrapper {
         display: flex;
         align-items: center;
@@ -206,6 +255,8 @@
         transition: background 0.2s ease;
         display: block;
         font-weight: 600;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
     }
     .sidebar .nav-link:hover {
         background: rgba(255,255,255,0.12);
@@ -234,6 +285,8 @@
         display: block;
         font-weight: 600;
         opacity: 0.95;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
     }
     .sidebar .nav-sublink:hover { background: rgba(255,255,255,0.10); }
     .sidebar .nav-sublink.active { background: var(--sidebar-active); }
@@ -242,53 +295,167 @@
     body { 
         margin-left: var(--sidebar-width); 
         margin-top: var(--header-h);
+        transition: margin-left 0.3s ease;
     }
-    @media (max-width: 900px) {
-        #menu-toggle { 
-            display:inline-block; 
-            min-width: 44px;
-            min-height: 44px;
-            font-size: 1.2rem;
+    body.sidebar-collapsed {
+        margin-left: 0;
+    }
+    
+    /* Tablet and Medium Screens */
+    @media (max-width: 1024px) {
+        :root {
+            --sidebar-width: 220px;
         }
-        .sidebar { 
-            transform: translateX(-100%); 
-            transition: transform 0.3s ease;
-            width: 280px;
-        }
-        .sidebar.open { transform: translateX(0); }
-        #sidebar-backdrop.active { display:block; }
-        body { margin-left: 0; }
-        .sidebar .nav-link {
-            padding: 10px 12px;
-            font-size: 0.95rem;
-            min-height: 40px;
-            display: flex;
-            align-items: center;
-        }
-        .sidebar .nav-sublink {
-            padding: 8px 12px 8px 24px;
-            min-height: 36px;
-            font-size: 0.9rem;
-            display: flex;
-            align-items: center;
-        }
-        .sidebar .brand {
-            padding: 8px 0;
+        .sidebar {
+            width: var(--sidebar-width);
+            padding: 18px 14px;
         }
         .sidebar .brand-logo {
             width: 48px;
             height: 48px;
         }
+        .sidebar .brand-user {
+            font-size: 1rem;
+        }
+        .sidebar .nav-link {
+            padding: 9px 10px;
+            font-size: 0.9rem;
+        }
+        .sidebar .nav-sublink {
+            padding: 7px 10px 7px 18px;
+            font-size: 0.85rem;
+        }
     }
-    @media (max-width: 600px) {
-        .sidebar {
-            width: 260px;
+    
+    /* Mobile and Small Tablets */
+    @media (max-width: 900px) {
+        :root {
+            --sidebar-width: 0;
+        }
+        .sidebar { 
+            width: 280px;
+            padding: 16px 12px;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.2);
+        }
+        .sidebar.collapsed { 
+            transform: translateX(-100%); 
+        }
+        .sidebar.open { 
+            transform: translateX(0); 
+        }
+        body { 
+            margin-left: 0 !important; 
+        }
+        body.sidebar-collapsed {
+            margin-left: 0 !important;
+        }
+        .sidebar .nav-link {
+            padding: 12px 12px;
+            font-size: 0.95rem;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            touch-action: manipulation;
+        }
+        .sidebar .nav-sublink {
+            padding: 10px 12px 10px 24px;
+            min-height: 40px;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            touch-action: manipulation;
+        }
+        .sidebar .brand {
+            padding: 8px 0 12px;
+        }
+        .sidebar .brand-logo {
+            width: 48px;
+            height: 48px;
+        }
+        .sidebar .brand-user {
+            font-size: 1rem;
+        }
+        .sidebar .brand-note {
+            font-size: 0.75rem;
+        }
+        #menu-toggle {
+            min-width: 44px;
+            min-height: 44px;
+            font-size: 1.3rem;
         }
         #app-header .header-inner {
             padding: 0 12px;
         }
+    }
+    
+    /* Small Mobile */
+    @media (max-width: 600px) {
+        .sidebar {
+            width: 260px;
+            padding: 14px 10px;
+        }
+        #app-header .header-inner {
+            padding: 0 10px;
+            gap: 8px;
+        }
         #app-header .header-brand {
             font-size: 0.95rem;
+        }
+        .sidebar .nav-link {
+            padding: 11px 10px;
+            font-size: 0.9rem;
+        }
+        .sidebar .nav-sublink {
+            padding: 9px 10px 9px 22px;
+            font-size: 0.85rem;
+        }
+        .sidebar .brand-logo {
+            width: 44px;
+            height: 44px;
+        }
+        .sidebar .brand-user {
+            font-size: 0.95rem;
+        }
+        .toggle-label {
+            font-size: 0.9rem;
+        }
+        .toggle-slider {
+            width: 44px;
+            height: 22px;
+        }
+        .toggle-slider::before {
+            width: 18px;
+            height: 18px;
+        }
+        .toggle-switch input[type="checkbox"]:checked + .toggle-slider::before {
+            transform: translateX(22px);
+        }
+    }
+    
+    /* Extra Small Mobile */
+    @media (max-width: 400px) {
+        .sidebar {
+            width: 240px;
+        }
+        #app-header .header-brand {
+            font-size: 0.85rem;
+        }
+        .sidebar .brand {
+            gap: 10px;
+        }
+        .sidebar .brand-logo {
+            width: 40px;
+            height: 40px;
+        }
+    }
+    
+    /* Large Screens - Sidebar always visible by default */
+    @media (min-width: 1025px) {
+        .sidebar.collapsed {
+            transform: translateX(-100%);
+        }
+        body.sidebar-collapsed {
+            margin-left: 0;
         }
     }
 </style>
@@ -328,47 +495,139 @@
             });
         }
         
-        // Sensors submenu toggle
-        var group = document.querySelector('.nav-group.sensors');
-        if (!group) return;
-        var toggle = group.querySelector('.nav-toggle');
-        if (!toggle) return;
-        toggle.addEventListener('click', function(){
-            var isOpen = group.getAttribute('data-open') === 'true';
-            group.setAttribute('data-open', isOpen ? 'false' : 'true');
-            toggle.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
-        });
-        
-        // Mobile menu toggle
+        // Sidebar toggle (works on all screen sizes)
         var btn = document.getElementById('menu-toggle');
         var sidebar = document.getElementById('app-sidebar');
         var backdrop = document.getElementById('sidebar-backdrop');
-        function setOpenState(open){
+        
+        // Load saved sidebar state (default: open)
+        var savedSidebarState = localStorage.getItem('sidebar-collapsed');
+        var isCollapsed = savedSidebarState === 'true';
+        
+        function setSidebarState(collapsed){
             if (!btn || !sidebar) return;
-            if (open) {
-                sidebar.classList.add('open');
-                btn.setAttribute('aria-expanded', 'true');
-                btn.textContent = '✕';
-                if (backdrop) backdrop.classList.add('active');
-                document.body.classList.add('menu-open');
-            } else {
-                sidebar.classList.remove('open');
+            var isMobile = window.innerWidth <= 900;
+            
+            if (collapsed) {
+                sidebar.classList.add('collapsed');
+                sidebar.classList.remove('open'); // Remove mobile open class if present
                 btn.setAttribute('aria-expanded', 'false');
                 btn.textContent = '☰';
-                if (backdrop) backdrop.classList.remove('active');
+                if (backdrop) {
+                    backdrop.classList.remove('active');
+                }
+                document.body.classList.add('sidebar-collapsed');
                 document.body.classList.remove('menu-open');
+                // Only save state on desktop (mobile always starts collapsed)
+                if (!isMobile) {
+                    localStorage.setItem('sidebar-collapsed', 'true');
+                }
+            } else {
+                sidebar.classList.remove('collapsed');
+                // On mobile, also add 'open' class and show backdrop
+                if (isMobile) {
+                    sidebar.classList.add('open');
+                    if (backdrop) {
+                        backdrop.classList.add('active');
+                    }
+                    document.body.classList.add('menu-open');
+                }
+                btn.setAttribute('aria-expanded', 'true');
+                btn.textContent = '✕';
+                document.body.classList.remove('sidebar-collapsed');
+                // Only save state on desktop
+                if (!isMobile) {
+                    localStorage.setItem('sidebar-collapsed', 'false');
+                }
             }
         }
+        
+        // Initialize sidebar state based on screen size
+        // On mobile (<=900px), always start collapsed
+        // On desktop (>900px), use saved preference
+        var isMobile = window.innerWidth <= 900;
+        var initialCollapsed = isMobile ? true : isCollapsed;
+        setSidebarState(initialCollapsed);
+        
         if (btn && sidebar) {
             btn.addEventListener('click', function(){
-                var open = sidebar.classList.contains('open');
-                setOpenState(!open);
+                var collapsed = sidebar.classList.contains('collapsed');
+                setSidebarState(!collapsed);
             });
             if (backdrop) {
-                backdrop.addEventListener('click', function(){ setOpenState(false); });
+                backdrop.addEventListener('click', function(){ 
+                    setSidebarState(true); 
+                });
             }
         }
+        
+        // Handle window resize - adjust behavior for mobile vs desktop
+        function handleResize() {
+            var isMobile = window.innerWidth <= 900;
+            var isCollapsed = sidebar.classList.contains('collapsed');
+            
+            if (isMobile) {
+                // On mobile, sidebar should be hidden by default (collapsed)
+                // Only show if explicitly opened
+                if (!isCollapsed && sidebar.classList.contains('open')) {
+                    // Sidebar is open on mobile - keep backdrop
+                    if (backdrop) backdrop.classList.add('active');
+                    document.body.classList.add('menu-open');
+                } else {
+                    // Sidebar should be collapsed on mobile
+                    if (!isCollapsed) {
+                        setSidebarState(true);
+                    }
+                }
+            } else {
+                // On desktop, remove mobile-specific classes
+                sidebar.classList.remove('open');
+                if (backdrop) backdrop.classList.remove('active');
+                document.body.classList.remove('menu-open');
+                
+                // On desktop, respect the saved collapsed state
+                // If it was collapsed, keep it collapsed; otherwise show it
+                if (isCollapsed) {
+                    // Keep collapsed state
+                } else {
+                    // Ensure sidebar is visible (not using 'open' class on desktop)
+                    sidebar.classList.remove('open');
+                }
+            }
+        }
+        
+        // Initial resize check
+        handleResize();
+        
+        // Debounce resize handler for better performance
+        var resizeTimeout;
+        window.addEventListener('resize', function(){
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(handleResize, 150);
+        });
     });
+    
+    // Logout confirmation handler
+    async function handleLogout(linkElement) {
+        if (typeof showConfirmation === 'undefined') {
+            // Fallback to direct navigation if confirmation dialog not loaded
+            if (linkElement) {
+                window.location.href = linkElement.getAttribute('href');
+            }
+            return;
+        }
+        var confirmed = await showConfirmation(
+            'Logout',
+            'Are you sure you want to logout? You will need to sign in again to access your account.',
+            'Logout',
+            'Cancel',
+            'logout'
+        );
+        if (confirmed && linkElement) {
+            window.location.href = linkElement.getAttribute('href');
+        }
+    }
 </script>
+{% include 'confirmation_dialog.html' %}
 
 

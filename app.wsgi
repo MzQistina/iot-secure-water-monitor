@@ -49,15 +49,17 @@ if os.path.exists(venv_path):
 # Set environment variables for the application
 # These are set here because mod_wsgi doesn't automatically pick up SetEnv from Apache config
 # Note: Use setdefault() so existing environment variables take precedence
-os.environ.setdefault('MQTT_HOST', '192.168.56.102')
+# Update MQTT_HOST to your physical Raspberry Pi's IP address
+os.environ.setdefault('MQTT_HOST', '192.168.43.214')  # Update to your physical Pi's IP
 os.environ.setdefault('MQTT_PORT', '8883')
 # Enable MQTT subscriber by default so provision_agent can receive responses.
 # If you want to keep it disabled set START_MQTT_SUBSCRIBER=0 in the environment.
 os.environ.setdefault('START_MQTT_SUBSCRIBER', '1')
 # TLS settings: use TLS for port 8883 or when MQTT_TLS=1.
 # For local/self-signed brokers set MQTT_TLS_INSECURE=1 to skip cert verification.
-os.environ.setdefault('MQTT_TLS', '1')
-os.environ.setdefault('MQTT_TLS_INSECURE', '1')
+os.environ['MQTT_USE_TLS'] = 'true'
+os.environ['MQTT_TLS_INSECURE'] = 'true'
+os.environ['MQTT_CA_CERTS'] = r'C:\Users\NURMIZAN QISTINA\Desktop\fyp\iot-secure-water-monitor\certs\ca-cert.pem'
 
 # Diagnostic: help debug missing key responses
 # Configure with environment variables:
@@ -329,29 +331,4 @@ except Exception as e:
     error_msg = f"[WSGI] Failed to import app: {str(e)}\n{traceback.format_exc()}"
     print(error_msg, file=sys.stderr)
     raise
-
-# Git / Push instructions (PowerShell)
-# -----------------------------------
-# cd "C:\Users\NURMIZAN QISTINA\Desktop\fyp\iot-secure-water-monitor"
-# 
-# If repo not initialized:
-#   git init
-#   git add .
-#   git commit -m "chore: initial commit"
-#   git remote add origin https://github.com/<your-username>/<your-repo>.git
-#   git branch -M main
-#   git push -u origin main
-#
-# If repo already exists remotely and you cloned earlier:
-#   git status
-#   git add .
-#   git commit -m "chore: update"
-#   git pull --rebase origin main      # resolve conflicts if any
-#   git push
-#
-# Notes:
-# - Use the interactive credential prompt or Git Credential Manager to authenticate.
-# - For GitHub over HTTPS use a Personal Access Token (PAT) when prompted; DO NOT hardcode tokens into files.
-# - To use SSH, add your public key to the remote account and use the SSH URL (git@github.com:...).
-# - If you need to force-push (careful), use: git push --force-with-lease origin main
 

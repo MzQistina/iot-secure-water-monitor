@@ -62,7 +62,7 @@ git rm -r --cached venv/
 - Option 2: Render Disk (paid feature)
 - Option 3: Generate new keys on first deployment
 
-**See:** `RENDER_DEPLOYMENT_GUIDE.md` → Step 6 for details
+**See:** `APACHE_SETUP.md` for server configuration details
 
 ### 7. Ready to Push?
 

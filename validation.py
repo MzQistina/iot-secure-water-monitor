@@ -404,7 +404,7 @@ def escape_html(text: str) -> str:
     return text
 
 
-def validate_device_type(device_type: str, allowed_types: Optional[list] = None) -> Tuple[bool, Optional[str]]:
+def validate_device_type(device_type: str, allowed_types: Optional[list] = None) -> Tuple[bool, Optional[str], str]:
     """
     Validate device type.
     
@@ -413,24 +413,28 @@ def validate_device_type(device_type: str, allowed_types: Optional[list] = None)
         allowed_types: List of allowed device types (optional)
         
     Returns:
-        Tuple of (is_valid, error_message)
+        Tuple of (is_valid, error_message, normalized_device_type)
+        normalized_device_type has spaces converted to underscores
     """
     if not device_type:
-        return False, "Device type is required."
+        return False, "Device type is required.", ""
     
     device_type = device_type.strip()
     
-    if len(device_type) > 100:
-        return False, "Device type must be 100 characters or less."
+    # Normalize: convert spaces to underscores
+    normalized_device_type = device_type.replace(' ', '_')
     
-    # Basic format check: alphanumeric, underscore, hyphen
-    if not re.match(r'^[a-zA-Z0-9_-]+$', device_type):
-        return False, "Device type can only contain letters, numbers, underscores, and hyphens."
+    if len(normalized_device_type) > 100:
+        return False, "Device type must be 100 characters or less.", normalized_device_type
+    
+    # Basic format check: alphanumeric, underscore, hyphen (after normalization)
+    if not re.match(r'^[a-zA-Z0-9_-]+$', normalized_device_type):
+        return False, "Device type can only contain letters, numbers, underscores, and hyphens.", normalized_device_type
     
     # Check against allowed types if provided
     if allowed_types:
-        if device_type.lower() not in [t.lower() for t in allowed_types]:
-            return False, f"Device type must be one of: {', '.join(allowed_types)}."
+        if normalized_device_type.lower() not in [t.lower() for t in allowed_types]:
+            return False, f"Device type must be one of: {', '.join(allowed_types)}.", normalized_device_type
     
-    return True, None
+    return True, None, normalized_device_type
 

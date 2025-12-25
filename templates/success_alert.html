@@ -1,0 +1,178 @@
+{# Success Alert Component Macro #}
+{% macro success_alert(message, description=None) %}
+<div class="success-alert" role="alert">
+    <div class="success-alert-content">
+        <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" class="success-alert-icon">
+            <path d="M16.5 8.31V9a7.5 7.5 0 1 1-4.447-6.855M16.5 3 9 10.508l-2.25-2.25" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div class="success-alert-text">
+            <h3 class="success-alert-title">{{ message }}</h3>
+            {% if description %}
+            <p class="success-alert-description">{{ description }}</p>
+            {% endif %}
+        </div>
+        <button type="button" aria-label="close" class="success-alert-close" onclick="this.parentElement.parentElement.remove()">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect y="12.532" width="17.498" height="2.1" rx="1.05" transform="rotate(-45.74 0 12.532)" fill="currentColor" fill-opacity=".7"/>
+                <rect x="12.531" y="13.914" width="17.498" height="2.1" rx="1.05" transform="rotate(-135.74 12.531 13.914)" fill="currentColor" fill-opacity=".7"/>
+            </svg>
+        </button>
+    </div>
+</div>
+{% endmacro %}
+
+{# Success Alert Styles #}
+<style>
+.success-alert {
+    background: white;
+    display: inline-flex;
+    width: 100%;
+    padding: 12px;
+    text-align: left;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    font-size: 0.875rem;
+}
+
+.success-alert-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: 100%;
+    flex-wrap: nowrap;
+}
+
+.success-alert-icon {
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+.success-alert-text {
+    flex: 1;
+    min-width: 0;
+}
+
+.success-alert-title {
+    margin: 0;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #334155;
+    line-height: 1.4;
+    font-family: inherit;
+}
+
+.success-alert-description {
+    margin: 4px 0 0 0;
+    font-size: 0.875rem;
+    color: #64748b;
+    line-height: 1.4;
+}
+
+.success-alert-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    margin-left: auto;
+    margin-top: auto;
+    margin-bottom: auto;
+    color: #94a3b8;
+    transition: color 0.2s, transform 0.1s;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.success-alert-close:hover {
+    color: #475569;
+}
+
+.success-alert-close:active {
+    transform: scale(0.95);
+}
+
+/* Dark mode support */
+[data-theme="dark"] .success-alert {
+    background: #1e293b;
+    border-color: #334155;
+}
+
+[data-theme="dark"] .success-alert-title {
+    color: #e2e8f0;
+}
+
+[data-theme="dark"] .success-alert-description {
+    color: #94a3b8;
+}
+
+[data-theme="dark"] .success-alert-close {
+    color: #64748b;
+}
+
+[data-theme="dark"] .success-alert-close:hover {
+    color: #cbd5e1;
+}
+</style>
+
+{# JavaScript function to dynamically show success alerts #}
+<script>
+function showSuccessAlert(message, description, container) {
+    // Create the alert element
+    var alertDiv = document.createElement('div');
+    alertDiv.className = 'success-alert';
+    alertDiv.setAttribute('role', 'alert');
+    
+    alertDiv.innerHTML = `
+        <div class="success-alert-content">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg" class="success-alert-icon">
+                <path d="M16.5 8.31V9a7.5 7.5 0 1 1-4.447-6.855M16.5 3 9 10.508l-2.25-2.25" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <div class="success-alert-text">
+                <h3 class="success-alert-title">${escapeHtml(message)}</h3>
+                ${description ? '<p class="success-alert-description">' + escapeHtml(description) + '</p>' : ''}
+            </div>
+            <button type="button" aria-label="close" class="success-alert-close" onclick="this.parentElement.parentElement.remove()">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect y="12.532" width="17.498" height="2.1" rx="1.05" transform="rotate(-45.74 0 12.532)" fill="currentColor" fill-opacity=".7"/>
+                    <rect x="12.531" y="13.914" width="17.498" height="2.1" rx="1.05" transform="rotate(-135.74 12.531 13.914)" fill="currentColor" fill-opacity=".7"/>
+                </svg>
+            </button>
+        </div>
+    `;
+    
+    // Find the container to insert the alert
+    var targetContainer = container || document.querySelector('.container') || document.body;
+    
+    // Insert at the beginning of the container
+    if (targetContainer.firstChild) {
+        targetContainer.insertBefore(alertDiv, targetContainer.firstChild);
+    } else {
+        targetContainer.appendChild(alertDiv);
+    }
+    
+    // Auto-remove after 5 seconds (optional)
+    setTimeout(function() {
+        if (alertDiv.parentNode) {
+            alertDiv.style.transition = 'opacity 0.3s ease';
+            alertDiv.style.opacity = '0';
+            setTimeout(function() {
+                if (alertDiv.parentNode) {
+                    alertDiv.remove();
+                }
+            }, 300);
+        }
+    }, 5000);
+    
+    return alertDiv;
+}
+
+function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+

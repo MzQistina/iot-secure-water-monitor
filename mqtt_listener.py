@@ -68,7 +68,8 @@ def on_message(client, userdata, msg):
         print(f"   Raw message received: {msg.payload.decode()[:200]}")
 
 # Get MQTT configuration from environment variables
-mqtt_host = os.environ.get('MQTT_HOST', '192.168.56.102')
+# Defaults updated for physical Raspberry Pi (update to your Pi's IP)
+mqtt_host = os.environ.get('MQTT_HOST', '192.168.43.214')  # Update to your physical Pi's IP
 mqtt_port = int(os.environ.get('MQTT_PORT', '8883'))
 mqtt_use_tls = os.environ.get('MQTT_USE_TLS', 'true').lower() in ('true', '1', 'yes')
 mqtt_ca_certs = os.environ.get('MQTT_CA_CERTS', 'certs/ca-cert.pem')

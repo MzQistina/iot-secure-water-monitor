@@ -1,0 +1,16 @@
+# Security Testing Requirements
+# Install with: pip install -r requirements_security.txt
+
+# For analyzing Wireshark capture files
+pyshark>=0.6
+
+# For MQTT testing (if not already installed)
+paho-mqtt>=2.0.0
+
+# For packet manipulation (optional, advanced)
+# scapy>=2.5.0
+
+
+
+
+

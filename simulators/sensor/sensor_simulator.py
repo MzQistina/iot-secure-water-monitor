@@ -8,7 +8,10 @@ import time
 import argparse
 import requests
 import paho.mqtt.publish as publish
+import paho.mqtt.client as mqtt
 import urllib3
+import re
+import ssl
 from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor
 
@@ -281,7 +284,11 @@ def generate_safe_payload_all_metrics(prefer_type: Optional[str] = None) -> dict
     return payload
 
 
-def publish_mqtt_payload(data: dict, mqtt_host: str = "localhost") -> None:
+def publish_mqtt_payload(data: dict, mqtt_host: str = "localhost", mqtt_port: int = 1883, 
+                         mqtt_user: Optional[str] = None, mqtt_password: Optional[str] = None,
+                         mqtt_use_tls: bool = False, mqtt_ca_certs: Optional[str] = None,
+                         mqtt_tls_insecure: bool = False) -> None:
+    """Publish sensor data to MQTT topic 'secure/sensor'."""
     data_json = json.dumps(data, sort_keys=True).encode()
     sha256_hash = hashlib.sha256(data_json).hexdigest()
 
@@ -294,8 +301,62 @@ def publish_mqtt_payload(data: dict, mqtt_host: str = "localhost") -> None:
         "sha256": sha256_hash,
     }
 
-    publish.single("secure/sensor", json.dumps(payload), hostname=mqtt_host)
-    print("Published encrypted data to MQTT.")
+    # Build publish kwargs
+    publish_kwargs = {
+        "hostname": mqtt_host,
+        "port": mqtt_port,
+    }
+    
+    if mqtt_user and mqtt_password:
+        publish_kwargs["auth"] = {"username": mqtt_user, "password": mqtt_password}
+    
+    if mqtt_use_tls:
+        tls_config = {}
+        if mqtt_ca_certs and os.path.exists(mqtt_ca_certs):
+            tls_config["ca_certs"] = mqtt_ca_certs
+        if mqtt_tls_insecure:
+            tls_config["cert_reqs"] = ssl.CERT_NONE
+        if tls_config:
+            publish_kwargs["tls"] = tls_config
+
+    publish.single("secure/sensor", json.dumps(payload), **publish_kwargs)
+    print(f"Published encrypted data to MQTT (device_id: {data.get('device_id', 'unknown')}).")
+
+
+def find_private_key(sensor_id: str, user_id: Optional[int] = None) -> Optional[str]:
+    """Find private key file, checking both user-specific and global locations."""
+    # Try user-specific location first (if user_id provided)
+    if user_id:
+        user_key_path = os.path.join(PROJECT_ROOT, "sensor_keys", str(user_id), sensor_id, "sensor_private.pem")
+        if os.path.exists(user_key_path):
+            return user_key_path
+    
+    # Try scanning all user_id directories
+    sensor_keys_dir = os.path.join(PROJECT_ROOT, "sensor_keys")
+    if os.path.exists(sensor_keys_dir):
+        for item in os.listdir(sensor_keys_dir):
+            item_path = os.path.join(sensor_keys_dir, item)
+            if os.path.isdir(item_path):
+                # Check if it's a user_id folder (numeric) or direct device_id folder
+                try:
+                    # Try as user_id folder
+                    user_id_test = int(item)
+                    device_key_path = os.path.join(item_path, sensor_id, "sensor_private.pem")
+                    if os.path.exists(device_key_path):
+                        return device_key_path
+                except ValueError:
+                    # Not a user_id, treat as direct device_id folder (legacy)
+                    if item == sensor_id:
+                        device_key_path = os.path.join(item_path, "sensor_private.pem")
+                        if os.path.exists(device_key_path):
+                            return device_key_path
+    
+    # Try global location (legacy/fallback)
+    global_key_path = os.path.join(PROJECT_ROOT, "sensor_keys", sensor_id, "sensor_private.pem")
+    if os.path.exists(global_key_path):
+        return global_key_path
+    
+    return None
 
 
 def sign_payload(sensor_id: str, private_key_path: Optional[str], payload_bytes: bytes) -> Optional[str]:
@@ -307,7 +368,7 @@ def sign_payload(sensor_id: str, private_key_path: Optional[str], payload_bytes:
     return base64.b64encode(signature).decode()
 
 
-def post_to_server(data: dict, sensor_id: str, server_url: str) -> None:
+def post_to_server(data: dict, sensor_id: str, server_url: str, user_id: Optional[int] = None) -> None:
     # Hybrid RSA+AES envelope using server's public key
     public_key_path = os.path.join(PROJECT_ROOT, "keys", "public.pem")
     encrypted = encrypt_data(data, public_key_path)
@@ -324,10 +385,16 @@ def post_to_server(data: dict, sensor_id: str, server_url: str) -> None:
     encrypted_b64["sha256"] = sha256_hash
 
     # Required signing with per-sensor keys to satisfy server validation
-    private_key_path = os.path.join(PROJECT_ROOT, "sensor_keys", sensor_id, "sensor_private.pem")
+    # Auto-find private key path (checks user-specific and legacy locations)
+    private_key_path = find_private_key(sensor_id, user_id)
+    if not private_key_path:
+        print(f"Missing private key for sensor '{sensor_id}'. Generate keys and register its public key.")
+        print(f"  Searched: sensor_keys/*/{sensor_id}/sensor_private.pem and sensor_keys/{sensor_id}/sensor_private.pem")
+        return
+    
     signature_b64 = sign_payload(sensor_id, private_key_path, data_json)
     if not signature_b64:
-        print(f"Missing private key for sensor '{sensor_id}'. Generate keys and register its public key.")
+        print(f"Failed to sign payload for sensor '{sensor_id}' using key at {private_key_path}")
         return
     encrypted_b64["sensor_id"] = sensor_id
     encrypted_b64["signature"] = signature_b64
@@ -350,7 +417,10 @@ def pick_active_sensor():
         return None
     return random.choice(active_sensors)
 
-def simulate_one(sensor: dict, generator_func, server_url: str, mqtt_host: str) -> None:
+def simulate_one(sensor: dict, generator_func, server_url: str, mqtt_host: str, 
+                 mqtt_port: int = 1883, mqtt_user: Optional[str] = None, 
+                 mqtt_password: Optional[str] = None, mqtt_use_tls: bool = False,
+                 mqtt_ca_certs: Optional[str] = None, mqtt_tls_insecure: bool = False) -> None:
     if generator_func is None:
         generator_func = generate_sensor_reading_for_type
     sensor_id = sensor.get("device_id")
@@ -368,10 +438,19 @@ def simulate_one(sensor: dict, generator_func, server_url: str, mqtt_host: str) 
     })
     print("Client JSON string:", json.dumps(data, sort_keys=True).encode())
     print("SHA-256 hash:", hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest())
-    publish_mqtt_payload(data, mqtt_host=mqtt_host)
-    post_to_server(data, sensor_id, server_url=server_url)
+    publish_mqtt_payload(data, mqtt_host=mqtt_host, mqtt_port=mqtt_port, 
+                        mqtt_user=mqtt_user, mqtt_password=mqtt_password,
+                        mqtt_use_tls=mqtt_use_tls, mqtt_ca_certs=mqtt_ca_certs,
+                        mqtt_tls_insecure=mqtt_tls_insecure)
+    # Get user_id from sensor dict if available (from database query)
+    sensor_user_id = sensor.get("user_id")
+    post_to_server(data, sensor_id, server_url=server_url, user_id=sensor_user_id)
 
-def simulate_many(target_sensors: List[dict], repeat: int, interval_seconds: float, parallel: bool, generator_func=None, server_url: str = "http://127.0.0.1:5000", mqtt_host: str = "localhost") -> None:
+def simulate_many(target_sensors: List[dict], repeat: int, interval_seconds: float, parallel: bool, 
+                  generator_func=None, server_url: str = "http://127.0.0.1:5000", mqtt_host: str = "localhost",
+                  mqtt_port: int = 1883, mqtt_user: Optional[str] = None, mqtt_password: Optional[str] = None,
+                  mqtt_use_tls: bool = False, mqtt_ca_certs: Optional[str] = None, 
+                  mqtt_tls_insecure: bool = False) -> None:
     if not target_sensors:
         print("No active sensors selected.")
         return
@@ -379,12 +458,161 @@ def simulate_many(target_sensors: List[dict], repeat: int, interval_seconds: flo
         if parallel and len(target_sensors) > 1:
             with ThreadPoolExecutor(max_workers=len(target_sensors)) as executor:
                 for s in target_sensors:
-                    executor.submit(simulate_one, s, generator_func, server_url, mqtt_host)
+                    executor.submit(simulate_one, s, generator_func, server_url, mqtt_host, 
+                                   mqtt_port, mqtt_user, mqtt_password, mqtt_use_tls, 
+                                   mqtt_ca_certs, mqtt_tls_insecure)
         else:
             for s in target_sensors:
-                simulate_one(s, generator_func, server_url, mqtt_host)
+                simulate_one(s, generator_func, server_url, mqtt_host, mqtt_port, 
+                           mqtt_user, mqtt_password, mqtt_use_tls, mqtt_ca_certs, mqtt_tls_insecure)
         if i < (int(repeat) - 1):
             time.sleep(float(interval_seconds))
+
+
+def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 1883,
+                                  mqtt_user: Optional[str] = None, mqtt_password: Optional[str] = None,
+                                  mqtt_use_tls: bool = False, mqtt_ca_certs: Optional[str] = None,
+                                  mqtt_tls_insecure: bool = False, mode: str = "safe") -> None:
+    """Run MQTT listener that responds to reading requests."""
+    reading_request_topic_base = os.environ.get('MQTT_READING_REQUEST_TOPIC_BASE', 'reading_request')
+    request_topic = f"{reading_request_topic_base}/+/request"
+    
+    # Select generator function based on mode
+    if mode == "safe":
+        gen = generate_sensor_reading_for_type_safe
+    elif mode == "unsafe":
+        gen = generate_sensor_reading_for_type_unsafe
+    else:
+        gen = generate_sensor_reading_for_type
+    
+    def on_connect(client, userdata, flags, reason_code, properties):
+        """Callback when MQTT client connects (API v2)."""
+        if reason_code == 0:
+            print(f"Sensor simulator connected to MQTT broker: {mqtt_host}:{mqtt_port}")
+            client.subscribe(request_topic)
+            print(f"Subscribed to reading request topic: {request_topic}")
+        else:
+            print(f"Failed to connect to MQTT broker: rc={reason_code}")
+    
+    def on_message(client, userdata, msg):
+        """Handle incoming reading requests."""
+        try:
+            # Extract device_id from topic: reading_request/{device_id}/request
+            topic_match = re.match(r'^' + re.escape(reading_request_topic_base) + r'/([^/]+)/request$', msg.topic or '')
+            if not topic_match:
+                print(f"Unknown topic format: {msg.topic}")
+                return
+            
+            device_id = (topic_match.group(1) or '').strip()
+            if not device_id:
+                print("Missing device_id in topic")
+                return
+            
+            # Parse request payload
+            payload_str = msg.payload.decode('utf-8', errors='replace') if msg.payload else '{}'
+            try:
+                request_data = json.loads(payload_str)
+            except json.JSONDecodeError:
+                request_data = {}
+            
+            location = request_data.get('location', '')
+            print(f"\n=== Received reading request ===")
+            print(f"  Topic: {msg.topic}")
+            print(f"  Device ID: {device_id}")
+            print(f"  Location: {location}")
+            
+            # Find sensor in database
+            sensors = list_sensors()
+            sensor = None
+            for s in sensors or []:
+                if s.get('device_id') == device_id and s.get('status') == 'active':
+                    sensor = s
+                    break
+            
+            if not sensor:
+                print(f"  ⚠️  Sensor '{device_id}' not found or not active. Skipping.")
+                return
+            
+            device_type = sensor.get('device_type', 'ph')
+            sensor_location = sensor.get('location', '')
+            
+            # Generate sensor reading
+            if getattr(gen, "__name__", "") == "generate_sensor_reading_for_type_safe":
+                data = generate_safe_payload_all_metrics(device_type)
+            else:
+                data = gen(device_type)
+            
+            data.update({
+                "device_id": device_id,
+                "device_type": device_type,
+                "location": sensor_location,
+            })
+            
+            print(f"  Generated reading: {data}")
+            
+            # Publish sensor data
+            publish_mqtt_payload(data, mqtt_host=mqtt_host, mqtt_port=mqtt_port,
+                                mqtt_user=mqtt_user, mqtt_password=mqtt_password,
+                                mqtt_use_tls=mqtt_use_tls, mqtt_ca_certs=mqtt_ca_certs,
+                                mqtt_tls_insecure=mqtt_tls_insecure)
+            
+            print(f"  ✅ Published reading for device '{device_id}'")
+            
+        except Exception as e:
+            print(f"Error processing reading request: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    # Create MQTT client
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    
+    # Configure authentication
+    if mqtt_user and mqtt_password:
+        client.username_pw_set(mqtt_user, mqtt_password)
+    
+    # Configure TLS if enabled
+    if mqtt_use_tls:
+        try:
+            if mqtt_ca_certs and os.path.exists(mqtt_ca_certs):
+                client.tls_set(
+                    ca_certs=mqtt_ca_certs,
+                    cert_reqs=ssl.CERT_REQUIRED if not mqtt_tls_insecure else ssl.CERT_NONE,
+                    tls_version=ssl.PROTOCOL_TLS
+                )
+                if mqtt_tls_insecure:
+                    client.tls_insecure_set(True)
+                    print(f"TLS enabled with CA cert: {mqtt_ca_certs} (INSECURE MODE)")
+                else:
+                    print(f"TLS enabled with CA cert: {mqtt_ca_certs}")
+            else:
+                client.tls_set(
+                    cert_reqs=ssl.CERT_NONE if mqtt_tls_insecure else ssl.CERT_REQUIRED,
+                    tls_version=ssl.PROTOCOL_TLS
+                )
+                if mqtt_tls_insecure:
+                    client.tls_insecure_set(True)
+                print(f"TLS enabled (using system CA certs)")
+        except Exception as tls_err:
+            print(f"TLS configuration error: {tls_err}")
+            print("Continuing without TLS (insecure)")
+    
+    client.on_connect = on_connect
+    client.on_message = on_message
+    
+    print(f"Connecting to MQTT broker: {mqtt_host}:{mqtt_port} ({'TLS' if mqtt_use_tls else 'plain'})")
+    try:
+        client.connect(mqtt_host, mqtt_port, keepalive=60)
+        print("Sensor simulator listening for reading requests... (Press Ctrl+C to stop)")
+        client.loop_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down gracefully...")
+        client.disconnect()
+        print("Disconnected")
+    except Exception as e:
+        print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
+        client.disconnect()
 
 
 def main() -> None:
@@ -397,7 +625,28 @@ def main() -> None:
     parser.add_argument("--mode", type=str, choices=["safe", "unsafe", "mixed"], default="mixed", help="Reading profile: safe (within thresholds), unsafe (outside), or mixed (original ranges)")
     parser.add_argument("--server-url", type=str, default=os.environ.get("SERVER_URL", "http://127.0.0.1:5000"), help="Base URL of Flask server, e.g., http://192.168.1.10:5000")
     parser.add_argument("--mqtt-host", type=str, default=os.environ.get("MQTT_HOST", "localhost"), help="MQTT broker host (default: localhost)")
+    parser.add_argument("--mqtt-port", type=int, default=int(os.environ.get("MQTT_PORT", "1883")), help="MQTT broker port (default: 1883)")
+    parser.add_argument("--mqtt-user", type=str, default=os.environ.get("MQTT_USER"), help="MQTT username")
+    parser.add_argument("--mqtt-password", type=str, default=os.environ.get("MQTT_PASSWORD"), help="MQTT password")
+    parser.add_argument("--mqtt-use-tls", action="store_true", default=os.environ.get("MQTT_USE_TLS", "false").lower() in ("true", "1", "yes"), help="Enable TLS/SSL for MQTT")
+    parser.add_argument("--mqtt-ca-certs", type=str, default=os.environ.get("MQTT_CA_CERTS"), help="Path to CA certificate file for TLS")
+    parser.add_argument("--mqtt-tls-insecure", action="store_true", default=os.environ.get("MQTT_TLS_INSECURE", "false").lower() in ("true", "1", "yes"), help="Disable certificate verification (insecure)")
+    parser.add_argument("--listen", action="store_true", help="Run in listener mode: subscribe to reading requests and respond automatically")
     args = parser.parse_args()
+    
+    # If --listen flag is set, run in listener mode
+    if args.listen:
+        run_reading_request_listener(
+            mqtt_host=args.mqtt_host,
+            mqtt_port=args.mqtt_port,
+            mqtt_user=args.mqtt_user,
+            mqtt_password=args.mqtt_password,
+            mqtt_use_tls=args.mqtt_use_tls,
+            mqtt_ca_certs=args.mqtt_ca_certs,
+            mqtt_tls_insecure=args.mqtt_tls_insecure,
+            mode=args.mode
+        )
+        return
 
     active_sensors = get_active_sensors()
     if not active_sensors:
@@ -438,6 +687,12 @@ def main() -> None:
         generator_func=gen,
         server_url=args.server_url,
         mqtt_host=args.mqtt_host,
+        mqtt_port=args.mqtt_port,
+        mqtt_user=args.mqtt_user,
+        mqtt_password=args.mqtt_password,
+        mqtt_use_tls=args.mqtt_use_tls,
+        mqtt_ca_certs=args.mqtt_ca_certs,
+        mqtt_tls_insecure=args.mqtt_tls_insecure,
     )
 
 

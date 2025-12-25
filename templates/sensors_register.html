@@ -22,9 +22,9 @@
         .field label { display:block; color: var(--text-primary); font-weight:600; margin-bottom:6px; transition: color 0.3s ease; }
         input[type="text"], select, textarea { width:100%; padding: 10px; border:1px solid var(--border-input); border-radius:8px; box-sizing: border-box; font-size:1rem; background: var(--bg-secondary); color: var(--text-primary); transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
         select { 
-            appearance: auto; 
-            -webkit-appearance: menulist; 
-            -moz-appearance: menulist; 
+            appearance: none; 
+            -webkit-appearance: none; 
+            -moz-appearance: none; 
             cursor: pointer;
             background-color: var(--bg-secondary);
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23355972' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
@@ -41,8 +41,6 @@
         .row-actions { margin-top: 10px; display:flex; gap:10px; align-items:center; }
         .btn { background:#2a4d69; color:#fff; border:none; padding: 12px 18px; border-radius:8px; cursor:pointer; }
         .btn:hover { background:#1e3b52; }
-        .error { background:#ffe3e3; color:#b02a37; border:1px solid #ffb3b3; padding:10px 12px; border-radius:8px; margin-bottom: 12px; }
-        .success { background:#e9f7ef; color:#1e6b3a; border:1px solid #b7e1c1; padding:10px 12px; border-radius:8px; margin-bottom: 12px; }
         @media (max-width: 800px){
             .container {
                 margin: 20px auto;
@@ -88,6 +86,10 @@
 </head>
 <body>
     {% include 'sidebar.html' %}
+    {% from 'success_alert.html' import success_alert %}
+    {% from 'error_alert.html' import error_alert %}
+    {% include 'success_alert.html' %}
+    {% include 'error_alert.html' %}
     <div class="container">
         <h1>Register Sensor</h1>
         <div class="subtitle">Add a new IoT sensor and keys</div>
@@ -95,12 +97,18 @@
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             {% for category, msg in messages %}
-                <div class="success">{{ msg }}</div>
+                {% if category == 'success' %}
+                    {{ success_alert(msg) }}
+                {% elif category == 'error' %}
+                    {{ error_alert(msg) }}
+                {% else %}
+                    <div class="{{ category }}">{{ msg }}</div>
+                {% endif %}
             {% endfor %}
         {% endif %}
         {% endwith %}
         {% if error %}
-            <div class="error">{{ error }}</div>
+            {{ error_alert(error) }}
         {% endif %}
 
         <form method="post" action="{{ url_for('sensors_register') }}" autocomplete="off">
@@ -300,7 +308,17 @@
                     body: JSON.stringify({ device_id: deviceId })
                 }).then(function(response) {
                     if (!response.ok) {
-                        throw new Error('Request failed: ' + response.status);
+                        // Try to get error message from response
+                        return response.json().then(function(errData) {
+                            var errorMsg = errData.error || 'Request failed: ' + response.status;
+                            if (errData.hint) {
+                                errorMsg += ' (' + errData.hint + ')';
+                            }
+                            throw new Error(errorMsg);
+                        }).catch(function() {
+                            // If JSON parsing fails, use status code
+                            throw new Error('Request failed: ' + response.status);
+                        });
                     }
                     return response.json();
                 }).then(function(data) {
@@ -321,7 +339,24 @@
                 }).catch(function(e){
                     console.error('Provision request error:', e);
                     if (statusEl) {
-                        statusEl.textContent = 'Error requesting key: ' + e.message;
+                        var errorMsg = 'Error requesting key: ' + e.message;
+                        // Try to get more details from response if available
+                        if (e.response) {
+                            e.response.json().then(function(errData) {
+                                if (errData && errData.error) {
+                                    statusEl.textContent = 'Error: ' + errData.error;
+                                    if (errData.hint) {
+                                        statusEl.textContent += ' (' + errData.hint + ')';
+                                    }
+                                } else {
+                                    statusEl.textContent = errorMsg;
+                                }
+                            }).catch(function() {
+                                statusEl.textContent = errorMsg;
+                            });
+                        } else {
+                            statusEl.textContent = errorMsg;
+                        }
                         statusEl.style.color = '#b02a37';
                     }
                     // Reset flag on error so user can retry

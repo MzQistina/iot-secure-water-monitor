@@ -402,7 +402,7 @@
             
             const order = Object.keys(byLoc).sort((a,b)=>a.localeCompare(b));
             // Priority order for common metrics, but we'll display all metrics found
-            const metricPriority = ['tds','ph','turbidity','temperature','dissolved_oxygen','conductivity','ammonia','pressure'];
+            const metricPriority = ['tds','ph','turbidity','temperature','dissolved_oxygen','conductivity','ammonia','pressure','chlorine','salinity','nitrate','nitrite','orp','flow'];
             
             // Clear and rebuild list
             list.innerHTML = '';
@@ -430,32 +430,15 @@
                 header.style.justifyContent = 'space-between';
                 header.style.alignItems = 'center';
                 
-                const headerLeft = document.createElement('div');
-                headerLeft.style.display = 'flex';
-                headerLeft.style.alignItems = 'center';
-                headerLeft.style.gap = '12px';
-                
                 const hlabel = document.createElement('span');
                 hlabel.className = 'reading-label';
                 hlabel.textContent = loc || 'Unknown';
-                
-                const requestBtn = document.createElement('button');
-                requestBtn.className = 'btn btn-small';
-                requestBtn.style.fontSize = '0.75rem';
-                requestBtn.style.padding = '4px 10px';
-                requestBtn.textContent = '📡 Request';
-                requestBtn.title = `Request reading from sensors at ${loc}`;
-                requestBtn.onclick = () => requestReadingForLocation(loc);
-                requestBtn.id = `request-btn-${loc.replace(/\s+/g, '-')}`;
-                
-                headerLeft.appendChild(hlabel);
-                headerLeft.appendChild(requestBtn);
                 
                 const hval = document.createElement('span');
                 hval.className = 'reading-value';
                 hval.textContent = 'Location';
                 
-                header.appendChild(headerLeft);
+                header.appendChild(hlabel);
                 header.appendChild(hval);
                 container.appendChild(header);
                 
@@ -658,58 +641,6 @@
             }
         }
 
-        async function requestReadingForLocation(location) {
-            const btnId = `request-btn-${location.replace(/\s+/g, '-')}`;
-            const btn = document.getElementById(btnId);
-            if (!btn) return;
-            
-            const originalText = btn.textContent;
-            btn.disabled = true;
-            btn.textContent = '⏳ Requesting...';
-            
-            try {
-                const res = await fetch("{{ url_for('api_reading_request') }}", {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ location: location })
-                });
-                
-                const data = await res.json();
-                
-                if (res.ok) {
-                    btn.textContent = '✅ Sent';
-                    btn.style.background = '#10b981';
-                    // Refresh data after a short delay to show new readings
-                    setTimeout(() => {
-                        manualRefresh();
-                    }, 2000);
-                    // Reset button after 3 seconds
-                    setTimeout(() => {
-                        btn.textContent = originalText;
-                        btn.style.background = '';
-                        btn.disabled = false;
-                    }, 3000);
-                } else {
-                    btn.textContent = '❌ Failed';
-                    btn.style.background = '#ef4444';
-                    setTimeout(() => {
-                        btn.textContent = originalText;
-                        btn.style.background = '';
-                        btn.disabled = false;
-                    }, 2000);
-                    console.error('Request failed:', data.error);
-                }
-            } catch (e) {
-                btn.textContent = '❌ Error';
-                btn.style.background = '#ef4444';
-                setTimeout(() => {
-                    btn.textContent = originalText;
-                    btn.style.background = '';
-                    btn.disabled = false;
-                }, 2000);
-                console.error('Request error:', e);
-            }
-        }
 
         // Initialize
         (async function() {

@@ -4,12 +4,21 @@
     <title>IoT Dashboard - Water Monitor</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <script>
+        // Apply theme immediately to prevent flash
+        (function() {
+            const theme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
     <style>
         body {
             font-family: 'Segoe UI', Arial, sans-serif;
-            background: #f4f8fb;
+            background: var(--bg-primary);
             margin: 0;
             padding: 0;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
         }
         .container {
             max-width: 1400px;
@@ -17,19 +26,25 @@
             padding: 20px;
         }
         h1 {
-            color: #2a4d69;
+            color: var(--text-primary);
             margin-bottom: 8px;
+            font-weight: 700;
+            transition: color 0.3s ease;
         }
         .sub {
-            color: #587a96;
+            color: var(--text-secondary);
             margin-bottom: 20px;
+            font-size: 0.95rem;
+            transition: color 0.3s ease;
         }
         .controls {
-            background: #fff;
+            background: var(--bg-secondary);
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: var(--shadow);
             margin-bottom: 20px;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid var(--border-color);
         }
         .location-selector, .time-range-selector {
             display: flex;
@@ -38,25 +53,26 @@
         }
         .location-selector label, .time-range-selector label {
             font-weight: 600;
-            color: #2a4d69;
+            color: var(--text-primary);
+            transition: color 0.3s ease;
         }
-        .location-selector select, .time-range-selector select {
+        .location-selector select, .time-range-selector select, #customRangeContainer input[type="datetime-local"] {
             padding: 8px 12px;
-            border: 1px solid #ddd;
+            border: 1px solid var(--border-input);
             border-radius: 4px;
             font-size: 14px;
             min-width: 200px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
         }
         #customRangeContainer {
             display: flex;
             align-items: center;
             gap: 10px;
         }
-        #customRangeContainer input[type="datetime-local"] {
-            padding: 8px 12px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
+        #customRangeContainer label {
+             color: var(--text-primary);
         }
         #applyCustomRange {
             padding: 8px 16px;
@@ -72,12 +88,14 @@
         #liveStatusBadge {
             margin-bottom: 20px;
             padding: 12px 20px;
-            background: #fff;
+            background: var(--bg-secondary);
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: var(--shadow);
             display: flex;
             align-items: center;
             gap: 10px;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid var(--border-color);
         }
         #statusIndicator {
             width: 12px;
@@ -98,14 +116,17 @@
         }
         #statusText {
             font-weight: 600;
-            color: #374151;
+            color: var(--text-primary);
+            transition: color 0.3s ease;
         }
         .summary-table {
-            background: #fff;
+            background: var(--bg-secondary);
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: var(--shadow);
             margin-bottom: 20px;
             overflow-x: auto;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid var(--border-color);
         }
         table {
             width: 100%;
@@ -114,15 +135,19 @@
         th, td {
             padding: 12px;
             text-align: left;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid var(--border-light);
+            color: var(--text-primary);
+            transition: border-color 0.3s ease, color 0.3s ease;
         }
         th {
-            background: #f8f9fa;
+            background: var(--bg-tertiary);
             font-weight: 600;
-            color: #2a4d69;
+            color: var(--text-primary);
+            transition: background-color 0.3s ease, color 0.3s ease;
         }
         tr:hover {
-            background: #f8f9fa;
+            background: var(--bg-tertiary);
+            transition: background-color 0.3s ease;
         }
         .status-safe {
             color: #22c55e;
@@ -133,16 +158,19 @@
             font-weight: 600;
         }
         .chart-container {
-            background: #fff;
+            background: var(--bg-secondary);
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: var(--shadow);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid var(--border-color);
         }
         .chart-title {
-            color: #2a4d69;
+            color: var(--text-primary);
             font-weight: 700;
             margin-bottom: 16px;
             font-size: 1.2rem;
+            transition: color 0.3s ease;
         }
         .chart-wrap {
             height: 300px;
@@ -161,12 +189,12 @@
         .loading {
             text-align: center;
             padding: 40px;
-            color: #587a96;
+            color: var(--text-secondary);
         }
         .no-data {
             text-align: center;
             padding: 40px;
-            color: #999;
+            color: var(--text-muted);
         }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -177,7 +205,6 @@
         <h1>Water Quality Dashboard</h1>
         <div class="sub">Monitor sensor data by location with safety status</div>
 
-        <!-- Controls and Status -->
         <div class="controls">
             <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
                 <div class="location-selector">
@@ -214,13 +241,11 @@
             </div>
         </div>
 
-        <!-- Live Status Badge -->
         <div id="liveStatusBadge">
             <span id="statusIndicator"></span>
             <span id="statusText">Checking status...</span>
         </div>
 
-        <!-- Summary Table -->
         <div class="summary-table">
             <table>
                 <thead>
@@ -264,12 +289,10 @@
                     {% endfor %}
                 </tbody>
             </table>
-    </div>
-
-        <!-- Charts Container (2x2 Grid) -->
-        <div id="chartsContainer">
-            <!-- Charts will be dynamically created here -->
         </div>
+
+        <div id="chartsContainer">
+            </div>
     </div>
 
     <script>
@@ -289,20 +312,23 @@
         let customDateFrom = null;
         let customDateTo = null;
 
-        // Calculate date range based on selection
-// Helper to get local ISO string (YYYY-MM-DDTHH:mm)
-function toLocalISOString(date) {
-            const offset = date.getTimezoneOffset() * 60000; // offset in milliseconds
+        // Chart default configurations for dark mode support
+        // We get the computed style of the body to pick up the correct variable colors
+        const bodyStyle = getComputedStyle(document.body);
+        // Use text-primary for better visibility in light mode (darker than text-secondary)
+        Chart.defaults.color = bodyStyle.getPropertyValue('--text-primary') || '#2a4d69';
+        Chart.defaults.borderColor = bodyStyle.getPropertyValue('--border-light') || '#eee';
+
+        function toLocalISOString(date) {
+            const offset = date.getTimezoneOffset() * 60000;
             const localDate = new Date(date.getTime() - offset);
             return localDate.toISOString().slice(0, 16);
         }
 
-        // Calculate date range based on selection
         function getDateRange(range) {
             const now = new Date();
             let from, to = toLocalISOString(now);
             
-            // Helper to get start of today
             function getStartOfToday() {
                 const start = new Date(now);
                 start.setHours(0, 0, 0, 0);
@@ -333,10 +359,9 @@ function toLocalISOString(date) {
                 default:
                     from = getStartOfToday();
             }
-            console.log('getDateRange:', range, 'from:', from, 'to:', to);
             return { from, to };
         }
-        // Update live status badge
+
         function updateLiveStatus(isLive) {
             if (isLive) {
                 statusIndicator.className = 'live';
@@ -349,7 +374,6 @@ function toLocalISOString(date) {
             }
         }
 
-        // Handle time range selection
         timeRangeSelect.addEventListener('change', function() {
             currentTimeRange = this.value;
             if (this.value === 'custom') {
@@ -360,7 +384,6 @@ function toLocalISOString(date) {
             }
         });
 
-        // Handle custom range apply
         applyCustomRange.addEventListener('click', function() {
             customDateFrom = dateFrom.value;
             customDateTo = dateTo.value;
@@ -387,7 +410,7 @@ function toLocalISOString(date) {
 
             chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">Loading data...</div></div>';
             statusText.textContent = 'Loading...';
-            statusIndicator.className = '';
+            statusIndicator.className = 'loading';
 
             const dateRange = getDateRange(currentTimeRange);
             const params = new URLSearchParams({
@@ -396,6 +419,8 @@ function toLocalISOString(date) {
             });
 
             loadTimeout = setTimeout(() => {
+                // Fetch sensor data from database via API endpoint
+                // The API endpoint queries the sensor_data table filtered by location, user_id, and date range
                 fetch(`/api/dashboard/location/${encodeURIComponent(location)}?${params}`)
                     .then(response => {
                         if (!response.ok) {
@@ -406,22 +431,14 @@ function toLocalISOString(date) {
                         return response.json();
                     })
                     .then(data => {
-                        console.log('API response:', data);
-                        console.log('Labels count:', data.labels ? data.labels.length : 0);
-                        console.log('Datasets count:', data.datasets ? data.datasets.length : 0);
-                        console.log('Row count:', data.row_count || 0);
-                        console.log('Point count:', data.point_count || 0);
-                        
                         if (!data.labels || data.labels.length === 0) {
-                            console.warn('No labels in response');
-                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No data available (no labels)</div><div style="padding: 10px; color: #666;">Row count: ' + (data.row_count || 0) + ', Point count: ' + (data.point_count || 0) + '</div></div>';
+                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No data available (no labels)</div><div style="padding: 10px; color: var(--text-muted);">Row count: ' + (data.row_count || 0) + ', Point count: ' + (data.point_count || 0) + '</div></div>';
                             updateLiveStatus(false);
                             return;
                         }
                         
                         if (!data.datasets || data.datasets.length === 0) {
-                            console.warn('No datasets in response');
-                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No sensor data (no datasets)</div><div style="padding: 10px; color: #666;">Labels: ' + data.labels.length + '</div></div>';
+                            chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No sensor data (no datasets)</div><div style="padding: 10px; color: var(--text-muted);">Labels: ' + data.labels.length + '</div></div>';
                             updateLiveStatus(false);
                             return;
                         }
@@ -448,18 +465,15 @@ function toLocalISOString(date) {
             const sensorDatasets = data.datasets.filter(ds => 
                 ds.metric !== 'safety_safe' && ds.metric !== 'safety_unsafe'
             );
-            const safetyDatasets = data.datasets.filter(ds => 
-                ds.metric === 'safety_safe' || ds.metric === 'safety_unsafe'
-            );
-
-            // Calculate max data points based on time range
-            const maxPoints = calculateMaxDataPoints(currentTimeRange);
+            
+            // Calculate max data points
+            const maxPoints = 100; // Simplified
             const labels = data.labels || [];
             const optimizedLabels = labels.length > maxPoints ? 
                 labels.filter((_, i) => i % Math.ceil(labels.length / maxPoints) === 0 || i === labels.length - 1) :
                 labels;
 
-            // Create sensor charts (limit to 3 for 2x2 grid)
+            // Create sensor charts
             const sensorsToShow = sensorDatasets.slice(0, 3);
             sensorsToShow.forEach((dataset, index) => {
                 const chartId = 'chart_' + dataset.metric;
@@ -474,7 +488,15 @@ function toLocalISOString(date) {
                 chartsContainer.appendChild(chartContainer);
 
                 const ctx = document.getElementById(chartId).getContext('2d');
-                const optimizedData = optimizeDataPoints(dataset.data || [], labels, optimizedLabels);
+                
+                // Optimize data points to match labels
+                let optimizedData = dataset.data || [];
+                if (dataset.data.length !== optimizedLabels.length) {
+                     // Simple resampling if needed (though usually labels match data)
+                     if (labels.length > maxPoints) {
+                        optimizedData = dataset.data.filter((_, i) => i % Math.ceil(labels.length / maxPoints) === 0 || i === labels.length - 1);
+                     }
+                }
                 
                 chartInstances[dataset.metric] = new Chart(ctx, {
                     type: 'line',
@@ -485,21 +507,42 @@ function toLocalISOString(date) {
                             data: optimizedData,
                             borderColor: dataset.color || '#0ea5e9',
                             backgroundColor: dataset.color || '#0ea5e9',
-                    borderWidth: 2,
+                            borderWidth: 2,
                             pointRadius: 0,
                             pointHoverRadius: 4,
-                    tension: 0.2,
-                    spanGaps: true,
+                            tension: 0.2,
+                            spanGaps: true,
                             fill: false
                         }]
                     },
-                    options: getChartOptions(dataset.label || 'Value')
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: true, position: 'top', labels: { color: getComputedStyle(document.body).getPropertyValue('--text-primary') } },
+                            tooltip: { intersect: false, mode: 'index' }
+                        },
+                        scales: {
+                            x: {
+                                ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 15, font: { size: 10 }, color: getComputedStyle(document.body).getPropertyValue('--text-primary') },
+                                title: { display: true, text: 'Date', color: getComputedStyle(document.body).getPropertyValue('--text-primary') },
+                                grid: { color: getComputedStyle(document.body).getPropertyValue('--border-light') }
+                            },
+                            y: {
+                                beginAtZero: false,
+                                title: { display: true, text: dataset.label || 'Value', color: getComputedStyle(document.body).getPropertyValue('--text-primary') },
+                                ticks: { font: { size: 10 }, color: getComputedStyle(document.body).getPropertyValue('--text-primary') },
+                                grid: { color: getComputedStyle(document.body).getPropertyValue('--border-light') }
+                            }
+                        },
+                        animation: false,
+                        interaction: { intersect: false, mode: 'index' }
+                    }
                 });
             });
 
-            // Create safety status chart (bar/step chart)
-// Create safety status chart (bar/step chart)
-if (data.safety_status && data.safety_status.length > 0) {
+            // Safety Status Chart
+            if (data.safety_status && data.safety_status.length > 0) {
                 const safetyChartId = 'chart_safety';
                 const safetyContainer = document.createElement('div');
                 safetyContainer.className = 'chart-container';
@@ -513,11 +556,10 @@ if (data.safety_status && data.safety_status.length > 0) {
 
                 const safetyCtx = document.getElementById(safetyChartId).getContext('2d');
                 
-                const optimizedSafetyData = optimizeDataPoints(
-                    data.safety_status, 
-                    labels, 
-                    optimizedLabels
-                );
+                let optimizedSafetyData = data.safety_status;
+                if (data.safety_status.length > maxPoints) {
+                    optimizedSafetyData = data.safety_status.filter((_, i) => i % Math.ceil(data.safety_status.length / maxPoints) === 0 || i === data.safety_status.length - 1);
+                }
 
                 chartInstances['safety'] = new Chart(safetyCtx, {
                     type: 'bar',
@@ -525,13 +567,9 @@ if (data.safety_status && data.safety_status.length > 0) {
                         labels: optimizedLabels,
                         datasets: [{
                             label: 'Safety Status',
-                            data: optimizedSafetyData, // Pass raw numbers (1 or 0)
-                            backgroundColor: optimizedSafetyData.map(v => 
-                                v === 1 ? '#22c55e' : '#ef4444'
-                            ),
-                            borderColor: optimizedSafetyData.map(v => 
-                                v === 1 ? '#16a34a' : '#dc2626'
-                            ),
+                            data: optimizedSafetyData,
+                            backgroundColor: optimizedSafetyData.map(v => v === 1 ? '#22c55e' : '#ef4444'),
+                            borderColor: optimizedSafetyData.map(v => v === 1 ? '#16a34a' : '#dc2626'),
                             borderWidth: 1,
                             barPercentage: 1.0,
                             categoryPercentage: 1.0
@@ -552,80 +590,27 @@ if (data.safety_status && data.safety_status.length > 0) {
                         },
                         scales: {
                             x: {
-                                ticks: {
-                                    maxRotation: 45,
-                                    autoSkip: true,
-                                    maxTicksLimit: 15,
-                                    font: { size: 10 }
-                                },
-                                title: { display: true, text: 'Date' }
+                                ticks: { maxRotation: 45, autoSkip: true, maxTicksLimit: 15, font: { size: 10 }, color: getComputedStyle(document.body).getPropertyValue('--text-primary') },
+                                title: { display: true, text: 'Date', color: getComputedStyle(document.body).getPropertyValue('--text-primary') },
+                                grid: { color: getComputedStyle(document.body).getPropertyValue('--border-light') }
                             },
                             y: {
                                 ticks: {
                                     font: { size: 10 },
                                     stepSize: 1,
-                                    callback: function(value) {
-                                        if (value === 1) return 'Safe';
-                                        if (value === 0) return 'Unsafe';
-                                        return '';
-                                    }
+                                    callback: function(value) { return value === 1 ? 'Safe' : (value === 0 ? 'Unsafe' : ''); },
+                                    color: getComputedStyle(document.body).getPropertyValue('--text-primary')
                                 },
                                 min: 0,
                                 max: 1,
-                                title: { display: true, text: 'Safety Status' }
+                                title: { display: true, text: 'Safety Status', color: getComputedStyle(document.body).getPropertyValue('--text-primary') },
+                                grid: { color: getComputedStyle(document.body).getPropertyValue('--border-light') }
                             }
                         },
                         animation: false
                     }
                 });
-            }        }
-
-        function calculateMaxDataPoints(range) {
-            switch(range) {
-                case '1h': return 60;      // 1 point per minute max
-                case 'today': return 96;    // 1 point per 15 minutes max
-                case '7d': return 168;      // 1 point per hour max
-                case '30d': return 180;     // 1 point per 4 hours max
-                case 'custom': return 200;  // Max 200 points
-                default: return 100;
             }
-        }
-
-        function optimizeDataPoints(data, originalLabels, optimizedLabels) {
-            if (data.length !== originalLabels.length) return data;
-            if (originalLabels.length === optimizedLabels.length) return data;
-            
-            const indices = optimizedLabels.map(label => originalLabels.indexOf(label));
-            return indices.map(i => data[i]);
-        }
-
-        function getChartOptions(yAxisTitle) {
-            return {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: true, position: 'top' },
-                    tooltip: { intersect: false, mode: 'index' }
-                },
-                scales: {
-                    x: {
-                        ticks: {
-                            maxRotation: 45,
-                            autoSkip: true,
-                            maxTicksLimit: 15,
-                            font: { size: 10 }
-                        },
-                        title: { display: true, text: 'Date' }
-                    },
-                    y: {
-                        beginAtZero: false,
-                        title: { display: true, text: yAxisTitle },
-                        ticks: { font: { size: 10 } }
-                    }
-                },
-                animation: false,
-                interaction: { intersect: false, mode: 'index' }
-            };
         }
 
         // Initialize
@@ -639,5 +624,6 @@ if (data.safety_status && data.safety_status.length > 0) {
             loadLocationData(this.value);
         });
     </script>
+    {% include 'footer.html' ignore missing %}
 </body>
 </html>

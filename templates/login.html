@@ -28,7 +28,6 @@
         input[type="text"], input[type="password"] { width: 100%; padding: 12px 10px; border: 1px solid #cfd9e3; border-radius: 8px; font-size: 1rem; box-sizing: border-box; }
         .btn { width: 100%; background: #2a4d69; color: #fff; border: none; padding: 12px; border-radius: 8px; font-size: 1rem; cursor: pointer; }
         .btn:hover { background: #1e3b52; }
-        .error { background: #ffe3e3; color: #b02a37; border: 1px solid #ffb3b3; padding: 10px 12px; border-radius: 8px; margin-bottom: 16px; }
         .note { color: #5b748c; font-size: 0.92rem; text-align: center; margin-top: 14px; }
         .input-wrap { position: relative; }
         .input-wrap input { padding-right: 2.5rem; }
@@ -56,10 +55,6 @@
             .btn {
                 padding: 14px;
                 font-size: 1rem;
-            }
-            .error {
-                font-size: 0.9rem;
-                padding: 12px;
             }
             .note {
                 font-size: 0.85rem;
@@ -111,19 +106,25 @@
 <body>
     <div class="container">
         <h1>Sign in</h1>
+        {% from 'success_alert.html' import success_alert %}
+        {% from 'error_alert.html' import error_alert %}
+        {% include 'success_alert.html' %}
+        {% include 'error_alert.html' %}
         {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
             {% for category, msg in messages %}
-                {% if category == 'error' %}
-                <div class="error">{{ msg }}</div>
+                {% if category == 'success' %}
+                    {{ success_alert(msg) }}
+                {% elif category == 'error' %}
+                    {{ error_alert(msg) }}
                 {% else %}
-                <div class="error" style="background:#e9f7ef; border:1px solid #b7e1c1; color:#1e6b3a;">{{ msg }}</div>
+                    {{ error_alert(msg) }}
                 {% endif %}
             {% endfor %}
         {% endif %}
         {% endwith %}
         {% if error %}
-        <div class="error">{{ error }}</div>
+        {{ error_alert(error) }}
         {% endif %}
         <form method="post" action="{{ url_for('login') }}" autocomplete="off">
             <input type="hidden" name="next" value="{{ next }}">
