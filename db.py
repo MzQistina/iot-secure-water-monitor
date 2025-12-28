@@ -12,76 +12,21 @@ except ImportError:
     CONNECT_AVAILABLE = False
     print("WARNING: connect.py not available, will use direct MySQL connection")
 
-# Detect database type from environment
-DB_TYPE = os.getenv('DB_TYPE', '').lower()
+# MySQL database configuration
+DB_TYPE = 'mysql'
 
-# Parse DATABASE_URL if provided (PostgreSQL style)
-DATABASE_URL = os.getenv('DATABASE_URL', '')
+# Import MySQL connector
+import mysql.connector
+from mysql.connector import pooling, Error, errorcode
 
-# Auto-detect PostgreSQL if DATABASE_URL is provided or host looks like PostgreSQL
-if not DB_TYPE:
-    if DATABASE_URL and 'postgresql://' in DATABASE_URL:
-        DB_TYPE = 'postgresql'
-        print(f"DEBUG: Auto-detected PostgreSQL from DATABASE_URL")
-    else:
-        # Check if DB_HOST looks like PostgreSQL (Render PostgreSQL hosts start with 'dpg-')
-        db_host = os.getenv('DB_HOST', '')
-        if db_host.startswith('dpg-') or 'postgres' in db_host.lower():
-            DB_TYPE = 'postgresql'
-            print(f"DEBUG: Auto-detected PostgreSQL from DB_HOST: {db_host}")
-        else:
-            DB_TYPE = 'mysql'  # Default to MySQL
-            print(f"DEBUG: Auto-detected MySQL (default)")
-
-print(f"DEBUG: Final DB_TYPE={DB_TYPE}")
-
-# Support both MySQL and PostgreSQL
-if DB_TYPE == 'postgresql':
-    try:
-        import psycopg2  # type: ignore
-        from psycopg2 import pool, Error  # type: ignore
-        from psycopg2.extras import RealDictCursor  # type: ignore
-        POSTGRESQL_AVAILABLE = True
-        print(f"DEBUG: psycopg2 imported successfully, version: {psycopg2.__version__ if hasattr(psycopg2, '__version__') else 'unknown'}")
-    except ImportError as e:
-        print(f"ERROR: psycopg2 import failed: {e}")
-        print("WARNING: psycopg2 not installed. Install with: pip install psycopg2-binary")
-        import traceback
-        traceback.print_exc()
-        POSTGRESQL_AVAILABLE = False
-        DB_TYPE = 'mysql'  # Fallback to MySQL
-    except Exception as e:
-        print(f"ERROR: Unexpected error importing psycopg2: {e}")
-        import traceback
-        traceback.print_exc()
-        POSTGRESQL_AVAILABLE = False
-        DB_TYPE = 'mysql'  # Fallback to MySQL
-else:
-    POSTGRESQL_AVAILABLE = False
-
-if DB_TYPE == 'mysql':
-    import mysql.connector
-    from mysql.connector import pooling, Error, errorcode
-
-# Parse DATABASE_URL if provided (PostgreSQL style)
-if DATABASE_URL and DB_TYPE == 'postgresql':
-    # Parse postgresql://user:password@host:port/dbname
-    import urllib.parse
-    parsed = urllib.parse.urlparse(DATABASE_URL)
-    DB_USER = urllib.parse.unquote(parsed.username or 'postgres')
-    DB_PASSWORD = urllib.parse.unquote(parsed.password or '')
-    DB_HOST = parsed.hostname or 'localhost'
-    DB_PORT = parsed.port or 5432
-    DB_NAME = parsed.path.lstrip('/') or 'ilmuwanutara_e2eewater'
-else:
-    # Environment-driven database configuration
-    # Default to local MySQL for development
-    # To use remote MySQL, set environment variables: DB_HOST=ilmuwanutara.my DB_USER=ilmuwanutara_e2eewater DB_PASSWORD=e2eeWater@2025
-    DB_HOST = os.getenv('DB_HOST', '127.0.0.1' if DB_TYPE == 'mysql' else 'localhost')
-    DB_PORT = int(os.getenv('DB_PORT', '5432' if DB_TYPE == 'postgresql' else '3306'))
-    DB_USER = os.getenv('DB_USER', 'postgres' if DB_TYPE == 'postgresql' else 'root')
-    DB_PASSWORD = os.getenv('DB_PASSWORD', '')  # Empty password for local MySQL root by default
-    DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
+# Environment-driven MySQL database configuration
+# Default to local MySQL for development
+# To use remote MySQL, set environment variables: DB_HOST=ilmuwanutara.my DB_USER=ilmuwanutara_e2eewater DB_PASSWORD=e2eeWater@2025
+DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
+DB_PORT = int(os.getenv('DB_PORT', '3306'))
+DB_USER = os.getenv('DB_USER', 'root')
+DB_PASSWORD = os.getenv('DB_PASSWORD', '')  # Empty password for local MySQL root by default
+DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
 
 _pool = None
 
@@ -96,49 +41,37 @@ def _can_use_database(pool):
 
 
 def _get_connection(pool):
-    """Get a connection from the pool (works for both MySQL and PostgreSQL)."""
-    if DB_TYPE == 'postgresql':
-        return pool.getconn()
+    """Get a connection from the pool (MySQL only)."""
+    # For MySQL, use connect.py if available, otherwise use pool directly
+    if CONNECT_AVAILABLE and pool is None:
+        # If pool is None, it means we're using connect.py's pool
+        return connect.get_connection()
+    elif pool is not None:
+        return pool.get_connection()
     else:
-        # For MySQL, use connect.py if available, otherwise use pool directly
-        if CONNECT_AVAILABLE and pool is None:
-            # If pool is None, it means we're using connect.py's pool
+        # Fallback: try to get connection from connect.py
+        if CONNECT_AVAILABLE:
             return connect.get_connection()
-        elif pool is not None:
-            return pool.get_connection()
-        else:
-            # Fallback: try to get connection from connect.py
-            if CONNECT_AVAILABLE:
-                return connect.get_connection()
-            raise Exception("No database connection available")
+        raise Exception("No database connection available")
 
 
 def _return_connection(pool, conn):
-    """Return a connection to the pool (works for both MySQL and PostgreSQL)."""
-    if DB_TYPE == 'postgresql':
-        pool.putconn(conn)
+    """Return a connection to the pool (MySQL only)."""
+    # For MySQL, use connect.py if available, otherwise use pool directly
+    if CONNECT_AVAILABLE and pool is None:
+        # If pool is None, it means we're using connect.py's pool
+        connect.close_connection(conn)
+    elif pool is not None:
+        conn.close()
     else:
-        # For MySQL, use connect.py if available, otherwise use pool directly
-        if CONNECT_AVAILABLE and pool is None:
-            # If pool is None, it means we're using connect.py's pool
+        # Fallback: try to close connection via connect.py
+        if CONNECT_AVAILABLE:
             connect.close_connection(conn)
-        elif pool is not None:
-            conn.close()
-        else:
-            # Fallback: try to close connection via connect.py
-            if CONNECT_AVAILABLE:
-                connect.close_connection(conn)
 
 
 def _get_cursor(conn, dictionary=False):
-    """Get a cursor (works for both MySQL and PostgreSQL)."""
-    if DB_TYPE == 'postgresql':
-        if dictionary:
-            return conn.cursor(cursor_factory=RealDictCursor)
-        else:
-            return conn.cursor()
-    else:
-        return conn.cursor(dictionary=dictionary)
+    """Get a MySQL cursor."""
+    return conn.cursor(dictionary=dictionary)
 
 
 def _create_database_if_missing() -> None:
@@ -170,19 +103,12 @@ def _create_database_if_missing() -> None:
 
 
 def _ensure_schema(conn) -> None:
-    # Create cursor based on database type
-    if DB_TYPE == 'postgresql':
-        cur = conn.cursor()
-        quote_char = '"'
-        auto_inc = 'SERIAL'
-        datetime_type = 'TIMESTAMP'
-        double_type = 'DOUBLE PRECISION'
-    else:
-        cur = conn.cursor(buffered=True)  # MySQL buffered cursor
-        quote_char = '`'
-        auto_inc = 'INT AUTO_INCREMENT'
-        datetime_type = 'DATETIME'
-        double_type = 'DOUBLE'
+    # Create MySQL cursor
+    cur = conn.cursor(buffered=True)  # MySQL buffered cursor
+    quote_char = '`'
+    auto_inc = 'INT AUTO_INCREMENT'
+    datetime_type = 'DATETIME'
+    double_type = 'DOUBLE'
     
     # Sensor type master table (defaults and metadata)
     cur.execute(
@@ -223,8 +149,7 @@ def _ensure_schema(conn) -> None:
             except:
                 pass
             print("Successfully seeded default sensor types")
-        else:
-            print(f"sensor_type table already has {count} entries")
+        # Don't print message if table already has entries (reduces noise)
         # Ensure all results are consumed (only if there are results)
         try:
             cur.fetchall()  # Consume any remaining results
@@ -239,20 +164,6 @@ def _ensure_schema(conn) -> None:
             cur.fetchall()
         except:
             pass
-    # water_readings table removed - using sensor_data table only
-    # cur.execute(
-    #     """
-    #     CREATE TABLE IF NOT EXISTS water_readings (
-    #         id INT AUTO_INCREMENT PRIMARY KEY,
-    #         tds TEXT,
-    #         ph TEXT,
-    #         turbidity TEXT,
-    #         safe_to_drink TINYINT(1),
-    #         safety_issues TEXT,
-    #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    #     )
-    #     """
-    # )
     # User credentials table for authentication (sr_no, email, name, username, password)
     cur.execute(
         f"""
@@ -267,47 +178,17 @@ def _ensure_schema(conn) -> None:
         """
     )
     # Sensors table for device registration and key management
-    if DB_TYPE == 'postgresql':
-        # PostgreSQL: Use VARCHAR with CHECK instead of ENUM
-        cur.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {quote_char}sensors{quote_char} (
+    # MySQL: Use ENUM
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {quote_char}sensors{quote_char} (
                 id {auto_inc} PRIMARY KEY,
                 device_id VARCHAR(100) NOT NULL,
                 device_type VARCHAR(100) NOT NULL,
                 sensor_type_id INT NULL,
                 location VARCHAR(255) DEFAULT NULL,
                 public_key TEXT NULL,
-                status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'revoked')),
-                registered_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
-                last_seen {datetime_type} DEFAULT NULL,
-                min_threshold {double_type} NULL,
-                max_threshold {double_type} NULL,
-                user_id INT NULL,
-                CONSTRAINT fk_sensors_user FOREIGN KEY (user_id)
-                    REFERENCES {quote_char}user_cred{quote_char}(sr_no) ON UPDATE CASCADE ON DELETE CASCADE
-            )
-            """
-        )
-        # Create indexes separately for PostgreSQL
-        try:
-            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_sensors_user_id ON {quote_char}sensors{quote_char}(user_id)")
-            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_sensors_device_id ON {quote_char}sensors{quote_char}(device_id)")
-            cur.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS unique_user_device ON {quote_char}sensors{quote_char}(user_id, device_id)")
-        except Exception:
-            pass
-    else:
-        # MySQL: Use ENUM
-        cur.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {quote_char}sensors{quote_char} (
-                id {auto_inc} PRIMARY KEY,
-                device_id VARCHAR(100) NOT NULL,
-                device_type VARCHAR(100) NOT NULL,
-                sensor_type_id INT NULL,
-                location VARCHAR(255) DEFAULT NULL,
-                public_key TEXT NULL,
-                status ENUM('active', 'inactive', 'revoked') DEFAULT 'active',
+                status ENUM('active', 'inactive') DEFAULT 'active',
                 registered_at {datetime_type} DEFAULT CURRENT_TIMESTAMP,
                 updated_at {datetime_type} DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 key_updated_at {datetime_type} DEFAULT NULL,
@@ -376,6 +257,9 @@ def _ensure_schema(conn) -> None:
             old_unique_indexes = cur.fetchall()
             cur.fetchall()  # Consume any remaining results
             
+            # Initialize fk_refs before the if block
+            fk_refs = []
+            
             if old_unique_indexes:
                 # Check for foreign keys that depend on device_id
                 cur.execute(f"""
@@ -426,7 +310,8 @@ def _ensure_schema(conn) -> None:
                 except Exception:
                     pass  # Index might already exist
             
-            # Recreate foreign keys
+            # Recreate foreign keys (only if we found any)
+            if fk_refs:
             for fk in fk_refs:
                 fk_name = fk[0] if isinstance(fk, tuple) else fk.get('CONSTRAINT_NAME')
                 table_name = fk[1] if isinstance(fk, tuple) else fk.get('TABLE_NAME')
@@ -728,18 +613,13 @@ def get_pool():
     # For MySQL, use connect.py if available
     if DB_TYPE == 'mysql' and CONNECT_AVAILABLE:
         # Use connect.py's connection pool
-        print("DEBUG: Using connect.py for MySQL database connections")
-        print(f"DEBUG: DB_HOST={connect.DB_HOST}, DB_PORT={connect.DB_PORT}, DB_USER={connect.DB_USER}, DB_NAME={connect.DB_NAME}")
-        
         # Test connection
         try:
             if connect.test_connection():
-                print("DEBUG: connect.py connection test successful")
                 # Initialize schema using connect.py connection
                 conn = connect.get_connection()
                 try:
                     _ensure_schema(conn)
-                    print("DEBUG: Schema ensured via connect.py")
                 finally:
                     connect.close_connection(conn)
                 # Return None to indicate we're using connect.py (not our own pool)
@@ -750,8 +630,6 @@ def get_pool():
                 return None
         except Exception as e:
             print(f"ERROR: Failed to use connect.py: {e}")
-            import traceback
-            traceback.print_exc()
             # Fallback to direct MySQL connection
             print("WARNING: Falling back to direct MySQL connection")
             # Continue to direct MySQL connection code below
@@ -771,40 +649,8 @@ def get_pool():
             print(f"WARNING: Existing pool is invalid, recreating: {e}")
             _pool = None
     
-    print(f"DEBUG: Initializing {DB_TYPE.upper()} database connection pool...")
-    print(f"DEBUG: DB_HOST={DB_HOST}, DB_PORT={DB_PORT}, DB_USER={DB_USER}, DB_NAME={DB_NAME}")
-    
-    if DB_TYPE == 'postgresql':
-        if not POSTGRESQL_AVAILABLE:
-            print("ERROR: PostgreSQL requested but psycopg2 not available")
-            return None
-        try:
-            _pool = psycopg2.pool.SimpleConnectionPool(
-                1,  # min connections
-                5,  # max connections
-                host=DB_HOST,
-                port=DB_PORT,
-                user=DB_USER,
-                password=DB_PASSWORD,
-                database=DB_NAME,
-            )
-            print("DEBUG: PostgreSQL connection pool created successfully")
-            
-            # Test the connection
-            _conn = _pool.getconn()
-            print("DEBUG: Test connection obtained from pool")
-            _ensure_schema(_conn)
-            _pool.putconn(_conn)
-            print("DEBUG: PostgreSQL database connection pool initialized successfully")
-            return _pool
-        except Exception as e:
-            _pool = None
-            print(f"ERROR: PostgreSQL connection error: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-    else:
-        # MySQL connection (fallback if connect.py not available)
+    # Initializing MySQL database connection pool
+    # MySQL connection (fallback if connect.py not available)
         try:
             _pool = pooling.MySQLConnectionPool(
                 pool_name="water_pool",
@@ -821,10 +667,8 @@ def get_pool():
             
             # Test the connection
             _conn = _get_connection(_pool)
-            print("DEBUG: Test connection obtained from pool")
             _ensure_schema(_conn)
             _return_connection(_pool, _conn)
-            print("DEBUG: MySQL database connection pool initialized successfully")
             return _pool
         except Error as init_err:
             errno = getattr(init_err, 'errno', None)
@@ -833,7 +677,6 @@ def get_pool():
             traceback.print_exc()
             
             if errno == errorcode.ER_BAD_DB_ERROR:
-                print("DEBUG: Database does not exist, attempting to create...")
                 _create_database_if_missing()
                 try:
                     _pool = pooling.MySQLConnectionPool(
@@ -848,7 +691,6 @@ def get_pool():
                     _conn = _get_connection(_pool)
                     _ensure_schema(_conn)
                     _return_connection(_pool, _conn)
-                    print("DEBUG: Database created and connection pool initialized")
                     return _pool
                 except Exception as retry_err:
                     _pool = None
@@ -1556,7 +1398,7 @@ def seed_sensor_types_if_empty():
         else:
             cur.close()
             _return_connection(pool, conn)
-            print(f"sensor_type table already has {count} entries")
+            # Don't print message if table already has entries (reduces noise)
             return False
     except Exception as e:
         print(f"ERROR: Failed to seed sensor types: {e}")
@@ -1606,9 +1448,10 @@ def list_sensor_types():
         cur.close()
         _return_connection(pool, conn)
         
-        print(f"DEBUG: list_sensor_types() returning {len(result)} sensor types")
-        if result:
-            print(f"DEBUG: Sensor types: {[r.get('type_name', 'NO_NAME') for r in result]}")
+        # Removed verbose DEBUG messages - they were printing for every sensor reading
+        # print(f"DEBUG: list_sensor_types() returning {len(result)} sensor types")
+        # if result:
+        #     print(f"DEBUG: Sensor types: {[r.get('type_name', 'NO_NAME') for r in result]}")
         
         return result
         
@@ -1725,19 +1568,7 @@ def get_sensor_type_by_type(sensor_type: str):
         print(f"MySQL get_sensor_type_by_type error: {e}")
         return None
     
-def get_thresholds_by_user(user_id: int):
-    # Deprecated
-    return {}
-
-
-def get_threshold_for_user(user_id: int, sensor_type: str):
-    # Deprecated
-    return None
-
-
-def upsert_threshold(user_id: int, sensor_type: str, min_value, max_value, use_default: bool) -> bool:
-    # Deprecated
-    return False
+# Deprecated threshold functions removed - using sensor_type defaults instead
 
 def list_recent_sensor_data(limit: int = 100, user_id: int | None = None):
     pool = get_pool()

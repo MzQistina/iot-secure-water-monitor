@@ -32,8 +32,8 @@ services:
       # MQTT Configuration
       MQTT_HOST: ${MQTT_HOST:-192.168.43.214}
       MQTT_PORT: ${MQTT_PORT:-8883}
-      MQTT_USER: ${MQTT_USER:-water_monitor}
-      MQTT_PASSWORD: ${MQTT_PASSWORD:-e2eeWater2025}
+      MQTT_USER: ${MQTT_USER:-admin_flask}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-flaske2ee25}
       MQTT_USE_TLS: ${MQTT_USE_TLS:-true}
       MQTT_TLS_INSECURE: ${MQTT_TLS_INSECURE:-true}
       # Optional: MQTT certificate paths (if using client certificates)
@@ -54,6 +54,15 @@ services:
       - ./keys:/app/keys
       - ./user_keys:/app/user_keys
       - ./sensor_keys:/app/sensor_keys
+      # Mount certs directory for TLS certificates (optional)
+      - ./certs:/app/certs:ro
+    # Health check (simple HTTP check)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('localhost', 5000)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     # Uncomment the line below if running Docker on the same server as MariaDB
     # and you want to use host network (Linux only)
     # network_mode: "host"

@@ -1,7 +1,10 @@
 # Key files (NEVER commit private keys!)
 user_keys/
-keys/
+keys/*.pem
+keys/*.key
 sensor_keys/
+*.pem
+*.key
 
 # Python
 __pycache__/
@@ -13,6 +16,9 @@ env/
 venv/
 ENV/
 .venv
+*.egg-info/
+dist/
+build/
 
 # IDE
 .vscode/
@@ -27,17 +33,18 @@ Thumbs.db
 
 # Logs
 *.log
+flask_error.log
+logs/
 
 # Environment variables
 .env
 .env.local
+.env.*.local
 
 # Database encryption keys (NEVER commit these!)
 db_encryption.key
-*.key
 
 # TLS/SSL certificates and private keys (NEVER commit these!)
-*.pem
 cert.pem
 key.pem
 server.crt
@@ -48,4 +55,33 @@ ca.crt
 ca.key
 *.crt
 *.cer
+certs/*.pem
+certs/*.crt
+certs/*.key
+
+# Test files and utilities (not needed in production)
+test_*.py
+*_test.py
+tests/
+examples/
+docs/archive/
+
+# Simulators (not needed on server)
+simulators/
+
+# Documentation (keep essential docs)
+*.md
+!README.md
+!LIGHTWEIGHT_OPTIMIZATION_GUIDE.md
+!OPTIMIZATION_SUMMARY.md
+!FINAL_CLEANUP_SUMMARY.md
+
+# Windows batch/PowerShell scripts (optional - can be committed if needed)
+# *.bat
+# *.ps1
+
+# Temporary files
+tmp/
+temp/
+*.tmp
 

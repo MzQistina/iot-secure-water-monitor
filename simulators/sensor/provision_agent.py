@@ -17,6 +17,16 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 from encryption_utils import decrypt_data
 
+# --- REPLAY ATTACK PROTECTION ---
+# Store recent nonces and timestamps for each device_id (in-memory, resets on restart)
+recent_nonces = {}  # device_id -> set of nonces
+recent_timestamps = {}  # device_id -> last timestamp (ISO8601 string)
+recent_payload_hashes = {}  # device_id -> list of (hash, timestamp) tuples (for messages without nonces/timestamps)
+NONCE_CACHE_SIZE = 50  # How many nonces to remember per device
+REPLAY_MAX_SKEW_SECONDS = 120  # Allow up to 2 minutes clock skew
+PAYLOAD_HASH_CACHE_SIZE = 20  # How many payload hashes to remember per device
+PAYLOAD_HASH_EXPIRY_SECONDS = 30  # Expire payload hashes after 30 seconds (allows legitimate retries)
+
 
 def _delete_sensor_directory(sensor_dir: str, device_id: str, user_id: Optional[str]) -> bool:
     """Delete all files in a sensor directory and remove the directory itself.
@@ -33,24 +43,16 @@ def _delete_sensor_directory(sensor_dir: str, device_id: str, user_id: Optional[
                     if os.path.isfile(file_path):
                         os.remove(file_path)
                         deleted_files.append(filename)
-                        print(f"  ✅ Deleted file: {filename}")
                 except Exception as e:
                     print(f"  ⚠️  Error deleting file {filename}: {e}")
             
             # Remove the sensor directory itself
             try:
                 os.rmdir(sensor_dir)
-                print(f"  ✅ Deleted directory: {sensor_dir}")
-            except OSError as e:
-                # Directory might not be empty or other error
-                if deleted_files:
-                    print(f"  ⚠️  Could not remove directory (may not be empty): {e}")
-                else:
-                    print(f"  ⚠️  Error deleting directory: {e}")
+            except OSError:
+                pass  # Directory might not be empty
             
             if deleted_files:
-                user_info = f" (user: {user_id})" if user_id else ""
-                print(f"✅ Deleted keys for device '{device_id}'{user_info}")
                 return True
     except Exception as e:
         print(f"  ⚠️  Error processing directory {sensor_dir}: {e}")
@@ -71,21 +73,15 @@ def ensure_keys(device_id: str, user_id: Optional[str] = None, force_regenerate:
     Returns:
         Path to public key file
     """
-    print(f"ensure_keys called: device_id='{device_id}', user_id={repr(user_id)}, force_regenerate={force_regenerate}")
-    
     # Create folder structure: sensor_keys/{user_id}/{device_id}/ or sensor_keys/{device_id}/
     if user_id:
         user_dir = os.path.join(PROJECT_ROOT, 'sensor_keys', str(user_id))
-        print(f"Creating user folder: {user_dir}")
         os.makedirs(user_dir, exist_ok=True)
         sensor_dir = os.path.join(user_dir, device_id)
-        print(f"Creating sensor folder in user directory: {sensor_dir}")
     else:
         sensor_dir = os.path.join(PROJECT_ROOT, 'sensor_keys', device_id)
-        print(f"Creating sensor folder (no user): {sensor_dir}")
     
     os.makedirs(sensor_dir, exist_ok=True)
-    print(f"Final sensor directory: {sensor_dir} (exists: {os.path.exists(sensor_dir)})")
     
     priv = os.path.join(sensor_dir, 'sensor_private.pem')
     pub = os.path.join(sensor_dir, 'sensor_public.pem')
@@ -95,15 +91,12 @@ def ensure_keys(device_id: str, user_id: Optional[str] = None, force_regenerate:
         try:
             if os.path.exists(priv):
                 os.remove(priv)
-                print(f"  Force regenerate: Deleted existing private key")
             if os.path.exists(pub):
                 os.remove(pub)
-                print(f"  Force regenerate: Deleted existing public key")
         except Exception as e:
-            print(f"  ⚠️  Warning: Could not delete existing keys for force regenerate: {e}")
+            print(f"⚠️  Could not delete keys: {e}")
     
     if not (os.path.exists(priv) and os.path.exists(pub)):
-        print(f"Keys don't exist, generating new keys...")
         key = RSA.generate(2048)
         with open(priv, 'wb') as f:
             f.write(key.export_key())
@@ -121,13 +114,9 @@ def ensure_keys(device_id: str, user_id: Optional[str] = None, force_regenerate:
         os.chmod(sensor_dir, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)  # 0o700
         
         if user_id:
-            print(f"✅ Generated keys for device '{device_id}' (user: {user_id}) at {sensor_dir}")
-            print(f"✅ Set secure permissions: private key (600), public key (644), directory (700)")
+            print(f"✅ Generated keys: {device_id} (user: {user_id})")
         else:
-            print(f"✅ Generated keys for device '{device_id}' at {sensor_dir}")
-            print(f"✅ Set secure permissions: private key (600), public key (644), directory (700)")
-    else:
-        print(f"Keys already exist at {sensor_dir}")
+            print(f"✅ Generated keys: {device_id}")
     
     return pub
 
@@ -154,18 +143,20 @@ def main():
 
     def on_connect(client, userdata, flags, reason_code, properties):
         """Callback when MQTT client connects (API v2)."""
-        print(f'Provision agent connected: rc={reason_code}')
         if reason_code == 0:
-            client.subscribe(request_topic)
-            client.subscribe(update_topic)
-            client.subscribe(delete_topic)
-            print(f'Provision agent subscribed to: {request_topic}')
-            print(f'Provision agent subscribed to: {update_topic}')
-            print(f'Provision agent subscribed to: {delete_topic}')
+            client.subscribe(request_topic, qos=1)
+            client.subscribe(update_topic, qos=1)
+            client.subscribe(delete_topic, qos=1)
+            print(f'✅ Connected & subscribed')
         else:
-            print(f'Provision agent connection failed: rc={reason_code}')
-
+            print(f'❌ Connection failed: rc={reason_code}')
+    
+    def on_subscribe(client, userdata, mid, granted_qos, properties):
+        """Callback when subscription is confirmed."""
+        pass  # Silent - connection message is enough
+    
     def on_message(client, userdata, msg):
+        """Callback when message is received."""
         try:
             device_id = None
             user_id = None
@@ -186,11 +177,19 @@ def main():
                 device_id = (request_match.group(1) or '').strip()
                 action_type = 'request'
             else:
-                print(f'Provision agent: Unknown topic format: {msg.topic}')
+                print(f'⚠️  Unknown topic: {msg.topic}')
                 return
             
             # Parse JSON body for device_id and user_id
             # Check if message is encrypted with E2EE
+            # 
+            # E2EE Expected Behavior:
+            # - "request": NO E2EE (keys don't exist yet - chicken-and-egg problem)
+            # - "update": YES E2EE (keys should exist from previous request)
+            # - "delete": YES E2EE (keys should exist from previous request)
+            # 
+            # Note: We try to decrypt all messages, but fall back to plaintext if decryption fails
+            # This handles the case where "request" messages are sent as plaintext
             decrypted_data = None
             if (msg.payload or b'').strip():
                 try:
@@ -202,11 +201,10 @@ def main():
                     
                     if is_encrypted:
                         # Decrypt E2EE message
-                        print(f"Provision agent: Detected E2EE encrypted message")
                         try:
                             # Get device_id from topic (already extracted above)
                             if not device_id:
-                                print("Provision agent: Cannot decrypt - device_id not found in topic")
+                                print("⚠️  Cannot decrypt: device_id not found")
                                 return
                             
                             # Try to find private key - we need to try multiple locations
@@ -231,7 +229,6 @@ def main():
                                     try:
                                         decrypted_data = decrypt_data(data, key_path)
                                         private_key_path = key_path
-                                        print(f"✅ Provision agent: Successfully decrypted E2EE message using {key_path}")
                                         break
                                     except Exception as decrypt_err:
                                         # Try next path
@@ -250,21 +247,30 @@ def main():
                                                 try:
                                                     decrypted_data = decrypt_data(data, key_path)
                                                     private_key_path = key_path
-                                                    print(f"✅ Provision agent: Successfully decrypted E2EE message using {key_path}")
                                                     break
                                                 except Exception:
                                                     continue
                             
+                            # For "request" messages: Try server private key if device key not found
+                            # Check topic pattern to determine if it's a request (action_type might not be set yet)
+                            is_request_topic = '/request' in msg.topic or action_type == 'request'
+                            if decrypted_data is None and is_request_topic:
+                                server_private_key_path = os.path.join(PROJECT_ROOT, 'keys', 'private.pem')
+                                if os.path.exists(server_private_key_path):
+                                    try:
+                                        decrypted_data = decrypt_data(data, server_private_key_path)
+                                        private_key_path = server_private_key_path
+                                        print(f"✅ Decrypted REQUEST using server private key")
+                                    except Exception as server_decrypt_err:
+                                        # Fall through to try plaintext parsing
+                                        pass
+                            
                             if decrypted_data is None:
-                                print(f"⚠️  Provision agent: Private key not found for device '{device_id}', cannot decrypt E2EE message")
-                                print(f"   Searched in: {', '.join(possible_paths[:3])}...")
-                                print(f"   This may be a 'request' action or keys not yet generated")
+                                if action_type != 'request':
+                                    print(f"⚠️  Cannot decrypt {device_id}: key not found")
                                 # Fall through to try plaintext parsing
                         except Exception as decrypt_err:
-                            print(f"⚠️  Provision agent: E2EE decryption failed: {decrypt_err}")
-                            import traceback
-                            print(f"   Traceback: {traceback.format_exc()}")
-                            print(f"   Falling back to plaintext parsing")
+                            print(f"⚠️  Decryption failed: {decrypt_err}")
                             # Fall through to try plaintext parsing
                     
                     # If not encrypted or decryption failed, use data as-is
@@ -283,25 +289,161 @@ def main():
                         if not user_id:
                             user_id = None
                     
-                    # Debug logging
-                    print(f"Provision agent received message:")
-                    print(f"  Topic: {msg.topic}")
-                    print(f"  E2EE: {'✅ Encrypted (decrypted)' if is_encrypted and decrypted_data else '❌ Plaintext'}")
-                    print(f"  Device ID: {device_id}")
-                    print(f"  User ID: {user_id}")
-                    print(f"  Action: {action_type.upper()}")
+                    # --- REPLAY ATTACK PROTECTION ---
+                    # Check for duplicate nonces and timestamps (only for update/delete actions)
+                    if action_type in ('update', 'delete') and device_id:
+                        nonce = decrypted_data.get('nonce')
+                        timestamp = decrypted_data.get('timestamp')
+                        
+                        # If message has no nonce or timestamp, use payload-based duplicate detection
+                        if not nonce and not timestamp:
+                            import hashlib
+                            from datetime import datetime, timezone
+                            # Create a hash of the payload (excluding any nonce/timestamp that might be added later)
+                            payload_str = json.dumps(decrypted_data, sort_keys=True)
+                            payload_hash = hashlib.sha256(payload_str.encode('utf-8')).hexdigest()
+                            
+                            # Get current timestamp
+                            now = datetime.now(timezone.utc)
+                            
+                            # Get or create payload hash cache (list of (hash, timestamp) tuples)
+                            payload_hashes = recent_payload_hashes.setdefault(device_id, [])
+                            
+                            # Clean up expired hashes first
+                            expired_cutoff = now.timestamp() - PAYLOAD_HASH_EXPIRY_SECONDS
+                            payload_hashes[:] = [(h, ts) for h, ts in payload_hashes if ts > expired_cutoff]
+                            
+                            # Check if we've seen this exact payload recently (within expiry window)
+                            for stored_hash, stored_ts in payload_hashes:
+                                if stored_hash == payload_hash:
+                                    # Found duplicate within expiry window - block it
+                                    age_seconds = now.timestamp() - stored_ts
+                                    print(f"🚫 [REPLAY BLOCKED] {device_id}/{action_type.upper()}: duplicate payload (seen {age_seconds:.1f}s ago)")
+                                    # Publish replay blocked status for test verification
+                                    try:
+                                        status_topic = f"provision/status/{device_id}/replay_blocked"
+                                        status_payload = json.dumps({
+                                            "device_id": device_id,
+                                            "payload_hash": payload_hash,
+                                            "reason": "duplicate_payload_no_nonce_timestamp",
+                                            "age_seconds": age_seconds,
+                                            "timestamp": now.isoformat()
+                                        })
+                                        client.publish(status_topic, status_payload, qos=1)
+                                    except Exception:
+                                        pass  # Don't fail if status publish fails
+                                    return  # Block replay
+                            
+                            # Store payload hash with current timestamp (limit cache size)
+                            payload_hashes.append((payload_hash, now.timestamp()))
+                            if len(payload_hashes) > PAYLOAD_HASH_CACHE_SIZE:
+                                # Remove oldest entries
+                                payload_hashes.sort(key=lambda x: x[1])  # Sort by timestamp
+                                while len(payload_hashes) > PAYLOAD_HASH_CACHE_SIZE:
+                                    payload_hashes.pop(0)  # Remove oldest
+                        
+                        # Check nonce replay
+                        if nonce:
+                            nonces = recent_nonces.setdefault(device_id, set())
+                            if nonce in nonces:
+                                print(f"🚫 [REPLAY BLOCKED] {device_id}/{action_type.upper()}: duplicate nonce")
+                                # Publish replay blocked status for test verification
+                                try:
+                                    from datetime import datetime, timezone
+                                    status_topic = f"provision/status/{device_id}/replay_blocked"
+                                    status_payload = json.dumps({
+                                        "device_id": device_id,
+                                        "nonce": nonce,
+                                        "reason": "duplicate_nonce",
+                                        "timestamp": datetime.now(timezone.utc).isoformat()
+                                    })
+                                    client.publish(status_topic, status_payload, qos=1)
+                                except Exception:
+                                    pass  # Don't fail if status publish fails
+                                return  # Block replay
+                        
+                        # Check timestamp replay
+                        if timestamp:
+                            try:
+                                from datetime import datetime, timezone
+                                # Parse timestamp and ensure it's timezone-aware
+                                ts_str = timestamp.replace('Z', '+00:00')
+                                ts = datetime.fromisoformat(ts_str)
+                                # Ensure ts is timezone-aware (in case fromisoformat returns naive)
+                                if ts.tzinfo is None:
+                                    ts = ts.replace(tzinfo=timezone.utc)
+                                now = datetime.now(timezone.utc)
+                                skew = abs((now - ts).total_seconds())
+                                
+                                if skew > REPLAY_MAX_SKEW_SECONDS:
+                                    print(f"🚫 [REPLAY BLOCKED] {device_id}/{action_type.upper()}: timestamp skew {skew:.0f}s (max {REPLAY_MAX_SKEW_SECONDS}s)")
+                                    # Publish replay blocked status for test verification
+                                    try:
+                                        status_topic = f"provision/status/{device_id}/replay_blocked"
+                                        status_payload = json.dumps({
+                                            "device_id": device_id,
+                                            "timestamp": timestamp,
+                                            "reason": "timestamp_skew",
+                                            "skew_seconds": skew,
+                                            "blocked_at": datetime.now(timezone.utc).isoformat()
+                                        })
+                                        client.publish(status_topic, status_payload, qos=1)
+                                    except Exception:
+                                        pass  # Don't fail if status publish fails
+                                    return  # Block replay
+                                
+                                # Block if timestamp not newer than last
+                                last_ts = recent_timestamps.get(device_id)
+                                if last_ts:
+                                    last_dt = datetime.fromisoformat(last_ts.replace('Z', '+00:00'))
+                                    # Ensure both datetimes are timezone-aware for comparison
+                                    if last_dt.tzinfo is None:
+                                        last_dt = last_dt.replace(tzinfo=timezone.utc)
+                                    if ts <= last_dt:
+                                        print(f"🚫 [REPLAY BLOCKED] {device_id}/{action_type.upper()}: timestamp not newer")
+                                        # Publish replay blocked status for test verification
+                                        try:
+                                            status_topic = f"provision/status/{device_id}/replay_blocked"
+                                            status_payload = json.dumps({
+                                                "device_id": device_id,
+                                                "timestamp": timestamp,
+                                                "previous_timestamp": last_ts,
+                                                "reason": "timestamp_not_newer",
+                                                "blocked_at": datetime.now(timezone.utc).isoformat()
+                                            })
+                                            client.publish(status_topic, status_payload, qos=1)
+                                        except Exception:
+                                            pass  # Don't fail if status publish fails
+                                        return  # Block replay
+                                
+                                recent_timestamps[device_id] = timestamp
+                            except Exception as ts_err:
+                                print(f"⚠️  Invalid timestamp {device_id}: {ts_err}")
+                        
+                        # Store nonce (limit cache size)
+                        if nonce:
+                            nonces.add(nonce)
+                            if len(nonces) > NONCE_CACHE_SIZE:
+                                while len(nonces) > NONCE_CACHE_SIZE:
+                                    nonces.pop()
+                    
+                    # Log message summary
+                    e2ee_status = '🔒 E2EE' if (is_encrypted and decrypted_data) else '📝 Plaintext'
+                    if action_type in ('update', 'delete') and not (is_encrypted and decrypted_data):
+                        e2ee_status = '⚠️  Plaintext (E2EE expected)'
+                    
+                    user_str = f" (user:{user_id})" if user_id else ""
+                    print(f"📨 {action_type.upper()} {device_id}{user_str} | {e2ee_status}")
                 except Exception as e:
-                    print(f"Provision agent: Error parsing JSON: {e}")
-                    print(f"  Raw payload: {msg.payload}")
+                    print(f"⚠️  JSON parse error: {e}")
+                    return
             
             if not device_id:
-                print('Provision agent: missing device_id; ignoring message')
+                print('⚠️  Missing device_id, ignoring')
                 return
             
             # Handle delete request
             if action_type == 'delete':
-                print(f"Processing delete request for device '{device_id}'" + (f" (user: {user_id})" if user_id else ""))
-                
                 deleted_any = False
                 
                 # Try user-specific location first if user_id provided
@@ -315,25 +457,23 @@ def main():
                 if os.path.exists(sensor_dir_global):
                     deleted_any = _delete_sensor_directory(sensor_dir_global, device_id, None) or deleted_any
                 
-                if not deleted_any:
-                    print(f"⚠️  No sensor directories found to delete for device '{device_id}'" + (f" (user: {user_id})" if user_id else ""))
+                if deleted_any:
+                    print(f"✅ Deleted keys: {device_id}")
+                else:
+                    print(f"⚠️  No keys found: {device_id}")
                 
                 return
             
             # Handle update request (regenerate existing keys)
             if action_type == 'update':
-                print(f"Updating/regenerating keys for device '{device_id}'" + (f" (user: {user_id})" if user_id else ""))
-                # Force regenerate keys (delete old and create new)
                 pub_path = ensure_keys(device_id, user_id, force_regenerate=True)
             
             # Handle request (initial key generation - only if keys don't exist)
             elif action_type == 'request':
-                print(f"Requesting keys for device '{device_id}'" + (f" (user: {user_id})" if user_id else ""))
-                # Generate keys only if they don't exist (don't force regenerate)
                 pub_path = ensure_keys(device_id, user_id, force_regenerate=False)
             
             else:
-                print(f"Unknown action type: {action_type}")
+                print(f"⚠️  Unknown action: {action_type}")
                 return
             
             # Publish the public key (for both request and update)
@@ -348,11 +488,7 @@ def main():
                 payload = json.dumps(payload_dict)
                 publish_topic = f"{keys_base}/{device_id}/public"
                 client.publish(publish_topic, payload)
-                
-                if user_id:
-                    print(f"Provision agent published key: {publish_topic} (user: {user_id})")
-                else:
-                    print(f"Provision agent published key: {publish_topic} (no user_id provided)")
+                print(f"📤 Published key: {publish_topic}")
         except Exception as e:
             print(f'Provision agent error: {e}')
             import traceback
@@ -377,7 +513,6 @@ def main():
                     cert_reqs=ssl.CERT_REQUIRED if not mqtt_tls_insecure else ssl.CERT_NONE,
                     tls_version=ssl.PROTOCOL_TLS
                 )
-                print(f"Provision agent: TLS enabled with CA cert: {mqtt_ca_certs}")
             else:
                 client.tls_set(
                     certfile=mqtt_certfile if (mqtt_certfile and os.path.exists(mqtt_certfile)) else None,
@@ -385,30 +520,24 @@ def main():
                     cert_reqs=ssl.CERT_NONE if mqtt_tls_insecure else ssl.CERT_REQUIRED,
                     tls_version=ssl.PROTOCOL_TLS
                 )
-                print(f"Provision agent: TLS enabled (using system CA certs)")
             
             if mqtt_tls_insecure:
                 client.tls_insecure_set(True)
-                print("Provision agent: TLS insecure mode enabled")
         except Exception as tls_err:
-            print(f"Provision agent: TLS configuration error: {tls_err}")
-            print("Provision agent: Continuing without TLS (insecure)")
+            print(f"⚠️  TLS error: {tls_err}")
     
     client.on_connect = on_connect
+    client.on_subscribe = on_subscribe
     client.on_message = on_message
-    print(f"Provision agent: Connecting to {mqtt_host}:{mqtt_port} ({'TLS' if mqtt_use_tls else 'plain'})")
+    print(f"🔌 Connecting to {mqtt_host}:{mqtt_port} ({'TLS' if mqtt_use_tls else 'plain'})...")
     client.connect(mqtt_host, mqtt_port, keepalive=60)
-    print("Provision agent: Starting message loop (press Ctrl+C to stop)...")
     try:
         client.loop_forever()
     except KeyboardInterrupt:
-        print("\nProvision agent: Shutting down gracefully...")
+        print("\n👋 Shutting down...")
         client.disconnect()
-        print("Provision agent: Disconnected")
     except Exception as e:
-        print(f"\nProvision agent: Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"\n❌ Error: {e}")
         client.disconnect()
 
 

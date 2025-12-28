@@ -41,6 +41,47 @@
         .row-actions { margin-top: 10px; display:flex; gap:10px; align-items:center; }
         .btn { background:#2a4d69; color:#fff; border:none; padding: 12px 18px; border-radius:8px; cursor:pointer; }
         .btn:hover { background:#1e3b52; }
+        .btn:disabled { 
+            background:#9ca3af; 
+            color:#fff; 
+            cursor:not-allowed; 
+            opacity:0.6; 
+        }
+        .btn:disabled:hover { background:#9ca3af; }
+        .label-wrapper { display: flex; align-items: center; gap: 6px; }
+        .info-btn { 
+            background: transparent; 
+            border: none; 
+            cursor: pointer; 
+            padding: 0; 
+            display: inline-flex; 
+            align-items: center; 
+            justify-content: center;
+            color: #6b8399;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+        }
+        .info-btn:hover { 
+            background: rgba(107, 131, 153, 0.1); 
+            color: #2a4d69;
+        }
+        .info-btn svg { 
+            width: 16px; 
+            height: 16px; 
+        }
+        .field-hint { 
+            font-size: 0.85rem; 
+            color: #6b8399; 
+            margin-top: 4px; 
+            line-height: 1.4;
+            display: none;
+        }
+        .field-hint.show {
+            display: block;
+        }
+        .required { color: #d32f2f; margin-left: 3px; }
         @media (max-width: 800px){
             .container {
                 margin: 20px auto;
@@ -81,6 +122,17 @@
             label {
                 font-size: 0.95rem;
             }
+            .info-btn {
+                width: 16px;
+                height: 16px;
+            }
+            .info-btn svg {
+                width: 14px;
+                height: 14px;
+            }
+            .field-hint {
+                font-size: 0.8rem;
+            }
         }
     </style>
 </head>
@@ -90,7 +142,7 @@
     {% from 'error_alert.html' import error_alert %}
     {% include 'success_alert.html' %}
     {% include 'error_alert.html' %}
-    <div class="container">
+    <div class="container" data-is-first-time="{% if is_first_time %}true{% else %}false{% endif %}">
         <h1>Register Sensor</h1>
         <div class="subtitle">Add a new IoT sensor and keys</div>
 
@@ -114,12 +166,21 @@
         <form method="post" action="{{ url_for('sensors_register') }}" autocomplete="off">
             <div class="grid">
                 <div class="field">
-                    <label for="device_id">Device ID</label>
+                    <div class="label-wrapper">
+                        <label for="device_id">Device ID<span class="required">*</span></label>
+                        <button type="button" class="info-btn" aria-label="Show request key instructions" data-hint="request-key-hint">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                        </button>
+                    </div>
                     <div style="display:flex; gap:8px; align-items:center;">
                         <input id="device_id" name="device_id" type="text" minlength="3" maxlength="100" required pattern="[a-zA-Z0-9_.-]{3,100}" title="Device ID can only contain letters, numbers, underscores, hyphens, and dots (3-100 characters)" style="flex:1;">
                         <button type="button" id="request_key_btn" class="btn" style="padding:10px 16px; white-space:nowrap; font-size:0.9rem;">Request Key</button>
                     </div>
-                    <div style="color: var(--text-muted); font-size:0.85rem; margin-top:4px;">Enter device ID and click "Request Key" to generate keys on Raspberry Pi</div>
+                    <div class="field-hint" id="request-key-hint">Format: 3-100 characters (letters, numbers, underscores, hyphens, dots)</div>
                 </div>
                 <div class="field">
                     <label for="device_type">Sensor Type</label>
@@ -152,7 +213,6 @@
                     <select id="status" name="status">
                         <option value="active">active</option>
                         <option value="inactive">inactive</option>
-                        <option value="revoked">revoked</option>
                     </select>
                 </div>
             </div>
@@ -201,7 +261,7 @@
             
 
             <div class="row-actions">
-                <button type="submit" class="btn">Register Sensor</button>
+                <button type="submit" id="submit_btn" class="btn" disabled>Register Sensor</button>
                 <a class="link" href="{{ url_for('dashboard') }}" style="color:#2a4d69; font-weight:600; text-decoration:none;">Cancel</a>
             </div>
         </form>
@@ -242,7 +302,11 @@
             if (minEl) minEl.disabled = useDefault;
             if (maxEl) maxEl.disabled = useDefault;
         }
+        
         document.addEventListener('DOMContentLoaded', function(){
+            // Get tour flag from data attribute (set by server)
+            var container = document.querySelector('.container');
+            var isFirstTime = container && container.getAttribute('data-is-first-time') === 'true';
             toggleTypeInputs();
             var sel = document.getElementById('device_type');
             // Debug: Check if dropdown has options
@@ -263,7 +327,39 @@
             // Manual key generation via button click
             var devInput = document.getElementById('device_id');
             var requestKeyBtn = document.getElementById('request_key_btn');
+            var submitBtn = document.getElementById('submit_btn');
             var _lastRequestedDeviceId = null;
+            var _keyRequested = false; // Track if key has been requested
+            
+            // Function to enable submit button after key is requested
+            function enableSubmitButton() {
+                _keyRequested = true;
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                }
+            }
+            
+            // Function to disable submit button (if key request fails)
+            function disableSubmitButton() {
+                _keyRequested = false;
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                }
+            }
+            
+            // Info button toggle for instructions
+            var infoButtons = document.querySelectorAll('.info-btn');
+            infoButtons.forEach(function(btn){
+                btn.addEventListener('click', function(e){
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var hintId = btn.getAttribute('data-hint');
+                    var hint = document.getElementById(hintId);
+                    if (hint) {
+                        hint.classList.toggle('show');
+                    }
+                });
+            });
             
             // Function to request key generation (called by button click)
             function requestKeyGeneration() {
@@ -277,7 +373,7 @@
                 }
                 
                 // Prevent duplicate requests for same device_id
-                if (_lastRequestedDeviceId === deviceId) {
+                if (_lastRequestedDeviceId === deviceId && _keyRequested) {
                     if (typeof checkKeyStatus === 'function') {
                         checkKeyStatus(deviceId);
                     }
@@ -327,6 +423,9 @@
                         statusEl.style.color = '#1e6b3a';
                     }
                     
+                    // Enable submit button after successful request
+                    enableSubmitButton();
+                    
                     // Start checking for key status after a delay
                     setTimeout(function(){
                         var currentDev = (devInput.value || '').trim();
@@ -359,6 +458,8 @@
                         }
                         statusEl.style.color = '#b02a37';
                     }
+                    // Disable submit button on error - user must retry
+                    disableSubmitButton();
                     // Reset flag on error so user can retry
                     if (_lastRequestedDeviceId === deviceId) {
                         _lastRequestedDeviceId = null;
@@ -391,6 +492,38 @@
                     if (e.key === 'Enter' && requestKeyBtn) {
                         e.preventDefault();
                         requestKeyGeneration();
+                    }
+                });
+            }
+            
+            // Prevent form submission if key hasn't been requested
+            var form = document.querySelector('form');
+            if (form) {
+                form.addEventListener('submit', function(e){
+                    if (!_keyRequested) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        // Show error alert instead of alert dialog
+                        if (typeof showErrorAlert === 'function') {
+                            showErrorAlert('You must request a key before registering the sensor. Please click "Request Key" first.');
+                        } else {
+                            alert('Please click "Request Key" before registering the sensor.');
+                        }
+                        if (requestKeyBtn) {
+                            requestKeyBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                        return false;
+                    }
+                });
+            }
+            
+            // Reset key requested flag if device ID changes
+            if (devInput) {
+                devInput.addEventListener('input', function(){
+                    var currentDevId = (devInput.value || '').trim();
+                    if (currentDevId !== _lastRequestedDeviceId) {
+                        disableSubmitButton();
+                        _lastRequestedDeviceId = null;
                     }
                 });
             }
@@ -479,6 +612,42 @@
             
             // Watcher is only started after button click (see requestKeyGeneration function)
             // It checks for keys that were already generated, not triggering new requests
+            
+            
+            // Auto-start tour for new registrants (first-time users)
+            if (isFirstTime) {
+                setTimeout(function() {
+                    // Check if tour was already shown for this page (using sessionStorage)
+                    var tourKey = 'sensor_register_tour_shown';
+                    var tourShown = sessionStorage.getItem(tourKey);
+                    
+                    if (!tourShown) {
+                        function startAutoTour() {
+                            if (typeof startTour === 'function') {
+                                startTour();
+                                sessionStorage.setItem(tourKey, 'true');
+                                return true;
+                            }
+                            return false;
+                        }
+                        
+                        // Try to start tour immediately
+                        if (!startAutoTour()) {
+                            // If not available, wait for it
+                            var checkTour = setInterval(function() {
+                                if (startAutoTour()) {
+                                    clearInterval(checkTour);
+                                }
+                            }, 100);
+                            
+                            // Stop checking after 5 seconds
+                            setTimeout(function() { 
+                                clearInterval(checkTour); 
+                            }, 5000);
+                        }
+                    }
+                }, 500);
+            }
         });
         
     </script>

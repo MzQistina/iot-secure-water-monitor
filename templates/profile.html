@@ -39,6 +39,41 @@
         .subtitle { text-align:center; color: var(--text-secondary); margin-bottom: 24px; transition: color 0.3s ease; }
         .field { margin-bottom: 16px; }
         label { display: block; color: var(--text-primary); margin-bottom: 8px; font-weight: 600; transition: color 0.3s ease; }
+        .label-wrapper { display: flex; align-items: center; gap: 6px; }
+        .required { color: #d32f2f; margin-left: 3px; }
+        .info-btn { 
+            background: transparent; 
+            border: none; 
+            cursor: pointer; 
+            padding: 0; 
+            display: inline-flex; 
+            align-items: center; 
+            justify-content: center;
+            color: #6b8399;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+        }
+        .info-btn:hover { 
+            background: rgba(107, 131, 153, 0.1); 
+            color: #2a4d69;
+        }
+        .info-btn svg { 
+            width: 16px; 
+            height: 16px; 
+        }
+        .field-hint { 
+            font-size: 0.85rem; 
+            color: #6b8399; 
+            margin-top: 4px; 
+            line-height: 1.4;
+            display: none;
+            transition: color 0.3s ease;
+        }
+        .field-hint.show {
+            display: block;
+        }
         input[type="text"], input[type="password"], input[type="email"] { width: 100%; padding: 12px 10px; border: 1px solid var(--border-input); border-radius: 8px; font-size: 1rem; box-sizing: border-box; background: var(--bg-secondary); color: var(--text-primary); transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease; }
         .row { display:flex; gap:12px; }
         .row .col { flex:1; }
@@ -89,6 +124,17 @@
             .link {
                 font-size: 0.95rem;
             }
+            .info-btn {
+                width: 16px;
+                height: 16px;
+            }
+            .info-btn svg {
+                width: 14px;
+                height: 14px;
+            }
+            .field-hint {
+                font-size: 0.8rem;
+            }
         }
     </style>
 </head>
@@ -121,31 +167,91 @@
 
         <form method="post" action="{{ url_for('profile') }}" autocomplete="off">
             <div class="field">
-                <label for="email">Email</label>
+                <div class="label-wrapper">
+                    <label for="email">Email<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show email instructions" data-hint="email-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <input id="email" name="email" type="email" maxlength="255" value="{{ user.email }}" required pattern="[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}" title="Please enter a valid email address">
+                <div class="field-hint" id="email-hint">Format: example@domain.com (max 255 characters)</div>
             </div>
             <div class="field">
-                <label for="name">Full name</label>
+                <div class="label-wrapper">
+                    <label for="name">Full name<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show name instructions" data-hint="name-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <input id="name" name="name" type="text" minlength="2" maxlength="255" value="{{ user.name }}" required pattern="[a-zA-Z\s'-.]{2,}" title="Name can only contain letters, spaces, hyphens, apostrophes, and periods">
+                <div class="field-hint" id="name-hint">2-255 characters. Letters, spaces, hyphens, apostrophes, and periods only</div>
             </div>
             <div class="field">
-                <label for="username">Username</label>
+                <div class="label-wrapper">
+                    <label for="username">Username<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show username instructions" data-hint="username-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <input id="username" name="username" type="text" minlength="3" maxlength="150" value="{{ user.username }}" required pattern="[a-zA-Z0-9_-]{3,150}" title="Username can only contain letters, numbers, underscores, and hyphens (3-150 characters)">
+                <div class="field-hint" id="username-hint">3-150 characters. Letters, numbers, underscores, and hyphens only (cannot start or end with _ or -)</div>
             </div>
 
             <div class="section-title">Change password (optional)</div>
             <div class="row">
                 <div class="col field">
-                    <label for="current_password">Current password</label>
+                    <div class="label-wrapper">
+                        <label for="current_password">Current password</label>
+                        <button type="button" class="info-btn" aria-label="Show current password instructions" data-hint="current-password-hint">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                        </button>
+                    </div>
                     <input id="current_password" name="current_password" type="password">
+                    <div class="field-hint" id="current-password-hint">Enter your current password to verify your identity</div>
                 </div>
                 <div class="col field">
-                    <label for="new_password">New password</label>
+                    <div class="label-wrapper">
+                        <label for="new_password">New password</label>
+                        <button type="button" class="info-btn" aria-label="Show new password instructions" data-hint="new-password-hint">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                        </button>
+                    </div>
                     <input id="new_password" name="new_password" type="password" minlength="8" maxlength="128" pattern="^(?=.*[a-zA-Z])(?=.*[0-9]).{8,}$" title="Password must be at least 8 characters and contain at least one letter and one number">
+                    <div class="field-hint" id="new-password-hint">8-128 characters. Must contain at least one letter and one number</div>
                 </div>
                 <div class="col field">
-                    <label for="confirm_password">Confirm new password</label>
+                    <div class="label-wrapper">
+                        <label for="confirm_password">Confirm new password</label>
+                        <button type="button" class="info-btn" aria-label="Show confirm password instructions" data-hint="confirm-password-hint">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="16" x2="12" y2="12"></line>
+                                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                            </svg>
+                        </button>
+                    </div>
                     <input id="confirm_password" name="confirm_password" type="password" minlength="8" maxlength="128">
+                    <div class="field-hint" id="confirm-password-hint">Must match your new password</div>
                 </div>
             </div>
 
@@ -156,6 +262,23 @@
         </form>
     </div>
     {% include 'footer.html' ignore missing %}
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Info button toggle for instructions
+            var infoButtons = document.querySelectorAll('.info-btn');
+            infoButtons.forEach(function(btn){
+                btn.addEventListener('click', function(e){
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var hintId = btn.getAttribute('data-hint');
+                    var hint = document.getElementById(hintId);
+                    if (hint) {
+                        hint.classList.toggle('show');
+                    }
+                });
+            });
+        });
+    </script>
 </body>
 </html>
 

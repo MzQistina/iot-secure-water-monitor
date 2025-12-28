@@ -3,7 +3,7 @@
 ## 📚 Documentation Index
 
 ### Quick Start Guides
-- **[RASPBIAN_COMMANDS.txt](RASPBIAN_COMMANDS.txt)** - Complete Raspbian commands reference (detailed, 414 lines)
+- **[RASPBERRY_PI_DEPLOYMENT.md](RASPBERRY_PI_DEPLOYMENT.md)** - Raspberry Pi deployment guide
 
 ### Setup & Installation
 - **[RASPBERRY_PI_SETUP.md](RASPBERRY_PI_SETUP.md)** - Raspberry Pi hardware setup
@@ -30,6 +30,48 @@
 
 1. **Windows Setup**: See `WINDOWS_STARTUP_SEQUENCE.txt` in root directory for startup sequence
 2. **Raspberry Pi Setup**: See [RASPBERRY_PI_SETUP.md](RASPBERRY_PI_SETUP.md) for hardware setup
+3. **Docker Setup**: See Docker section below
+
+## 🐳 Docker Deployment
+
+### Prerequisites
+- Docker and Docker Compose installed
+- Environment variables configured (see `.env.example` or docker-compose.yml)
+
+### Quick Start with Docker
+
+1. **Build and run with Docker Compose:**
+   ```bash
+   docker-compose up -d
+   ```
+
+2. **View logs:**
+   ```bash
+   docker-compose logs -f web
+   ```
+
+3. **Stop services:**
+   ```bash
+   docker-compose down
+   ```
+
+### Environment Variables
+
+Create a `.env` file or set environment variables:
+- `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` - Database connection
+- `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASSWORD` - MQTT broker
+- `MQTT_USE_TLS`, `MQTT_TLS_INSECURE` - MQTT TLS settings
+- `SECRET_KEY` - Flask secret key (change in production!)
+
+### Volumes
+
+The following directories are mounted as volumes:
+- `./keys` - Server keys (RSA key pairs)
+- `./user_keys` - User-specific keys
+- `./sensor_keys` - Sensor keys
+- `./certs` - TLS certificates (read-only)
+
+**Important:** Never commit keys or certificates to Git. They are excluded via `.gitignore`.
 
 ## 🛠️ Utilities
 
@@ -39,6 +81,5 @@
 
 ## 📝 Notes
 
-- Most comprehensive Raspbian command reference: `RASPBIAN_COMMANDS.txt` (414 lines)
-- Windows startup sequence: `WINDOWS_STARTUP_SEQUENCE.txt` (root directory)
+- Raspberry Pi deployment: See [RASPBERRY_PI_DEPLOYMENT.md](RASPBERRY_PI_DEPLOYMENT.md)
 

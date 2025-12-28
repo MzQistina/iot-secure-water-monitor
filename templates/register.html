@@ -26,6 +26,40 @@
         h1 { text-align: center; color: #2a4d69; margin-bottom: 24px; }
         .field { margin-bottom: 16px; }
         label { display: block; color: #355972; margin-bottom: 8px; font-weight: 600; }
+        .label-wrapper { display: flex; align-items: center; gap: 6px; }
+        .required { color: #d32f2f; margin-left: 3px; }
+        .info-btn { 
+            background: transparent; 
+            border: none; 
+            cursor: pointer; 
+            padding: 0; 
+            display: inline-flex; 
+            align-items: center; 
+            justify-content: center;
+            color: #6b8399;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+        }
+        .info-btn:hover { 
+            background: #e3ebf1; 
+            color: #2a4d69;
+        }
+        .info-btn svg { 
+            width: 16px; 
+            height: 16px; 
+        }
+        .field-hint { 
+            font-size: 0.85rem; 
+            color: #6b8399; 
+            margin-top: 4px; 
+            line-height: 1.4;
+            display: none;
+        }
+        .field-hint.show {
+            display: block;
+        }
         input[type="text"], input[type="password"], input[type="email"] { width: 100%; padding: 12px 10px; border: 1px solid #cfd9e3; border-radius: 8px; font-size: 1rem; box-sizing: border-box; }
         .btn { width: 100%; background: #2a4d69; color: #fff; border: none; padding: 12px; border-radius: 8px; font-size: 1rem; cursor: pointer; }
         .btn:hover { background: #1e3b52; }
@@ -62,6 +96,17 @@
             .note, .link {
                 font-size: 0.85rem;
             }
+            .field-hint {
+                font-size: 0.8rem;
+            }
+            .info-btn {
+                width: 16px;
+                height: 16px;
+            }
+            .info-btn svg {
+                width: 14px;
+                height: 14px;
+            }
         }
         @media (max-width: 400px) {
             .container {
@@ -86,19 +131,58 @@
         <form method="post" action="{{ url_for('register', next=next) }}" autocomplete="off">
             <input type="hidden" name="next" value="{{ next }}">
             <div class="field">
-                <label for="email">Email</label>
+                <div class="label-wrapper">
+                    <label for="email">Email<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show email instructions" data-hint="email-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <input id="email" name="email" type="email" maxlength="255" required pattern="[a-zA-Z0-9._+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}" title="Please enter a valid email address">
+                <div class="field-hint" id="email-hint">Format: example@domain.com (max 255 characters)</div>
             </div>
             <div class="field">
-                <label for="name">Full name</label>
+                <div class="label-wrapper">
+                    <label for="name">Full name<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show name instructions" data-hint="name-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <input id="name" name="name" type="text" minlength="2" maxlength="255" required pattern="[a-zA-Z\s'-.]{2,}" title="Name can only contain letters, spaces, hyphens, apostrophes, and periods">
+                <div class="field-hint" id="name-hint">2-255 characters. Letters, spaces, hyphens, apostrophes, and periods only</div>
             </div>
             <div class="field">
-                <label for="username">Username</label>
+                <div class="label-wrapper">
+                    <label for="username">Username<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show username instructions" data-hint="username-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <input id="username" name="username" type="text" minlength="3" maxlength="150" required pattern="[a-zA-Z0-9_-]{3,150}" title="Username can only contain letters, numbers, underscores, and hyphens (3-150 characters)">
+                <div class="field-hint" id="username-hint">3-150 characters. Letters, numbers, underscores, and hyphens only (cannot start or end with _ or -)</div>
             </div>
             <div class="field">
-                <label for="password">Password</label>
+                <div class="label-wrapper">
+                    <label for="password">Password<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show password instructions" data-hint="password-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <div class="input-wrap">
                     <input id="password" name="password" type="password" minlength="8" maxlength="128" required pattern="^(?=.*[a-zA-Z])(?=.*[0-9]).{8,}$" title="Password must be at least 8 characters and contain at least one letter and one number">
                     <button type="button" class="toggle-visibility" aria-label="Show password" data-target="password">
@@ -112,9 +196,19 @@
                         </svg>
                     </button>
                 </div>
+                <div class="field-hint" id="password-hint">8-128 characters. Must contain at least one letter and one number</div>
             </div>
             <div class="field">
-                <label for="confirm">Confirm Password</label>
+                <div class="label-wrapper">
+                    <label for="confirm">Confirm Password<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show confirm password instructions" data-hint="confirm-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <div class="input-wrap">
                     <input id="confirm" name="confirm" type="password" minlength="8" maxlength="128" required>
                     <button type="button" class="toggle-visibility" aria-label="Show password" data-target="confirm">
@@ -128,6 +222,7 @@
                         </svg>
                     </button>
                 </div>
+                <div class="field-hint" id="confirm-hint">Must match your password</div>
             </div>
             <button type="submit" class="btn">Register</button>
         </form>
@@ -139,6 +234,7 @@
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         try {
+            // Password visibility toggle
             var buttons = document.querySelectorAll('.toggle-visibility');
             buttons.forEach(function(btn){
                 try {
@@ -163,6 +259,24 @@
                     });
                 } catch(err) {
                     console.error('Button setup error:', err);
+                }
+            });
+
+            // Info button toggle for instructions
+            var infoButtons = document.querySelectorAll('.info-btn');
+            infoButtons.forEach(function(btn){
+                try {
+                    btn.addEventListener('click', function(e){
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var hintId = btn.getAttribute('data-hint');
+                        var hint = document.getElementById(hintId);
+                        if (hint) {
+                            hint.classList.toggle('show');
+                        }
+                    });
+                } catch(err) {
+                    console.error('Info button error:', err);
                 }
             });
         } catch(err) {

@@ -20,8 +20,8 @@
     <a class="nav-link {{ 'active' if request.path == url_for('history') else '' }}" href="{{ url_for('history') }}">History</a>
     
     {% set sensors_section_active = (request.path == url_for('sensors')) or (request.path == url_for('sensors_register')) %}
-    <div class="nav-group sensors" data-open="{{ 'true' if sensors_section_active else 'false' }}">
-        <button class="nav-link nav-toggle {{ 'active' if sensors_section_active else '' }}" type="button" aria-expanded="{{ 'true' if sensors_section_active else 'false' }}" aria-controls="submenu-sensors">
+    <div class="nav-group sensors" data-open="true">
+        <button class="nav-link nav-toggle {{ 'active' if sensors_section_active else '' }}" type="button" aria-expanded="true" aria-controls="submenu-sensors">
             Sensors
             <span class="chevron">▸</span>
         </button>
@@ -31,7 +31,12 @@
         </div>
     </div>
     <a class="nav-link {{ 'active' if request.path == url_for('profile') else '' }}" href="{{ url_for('profile') }}">Profile</a>
-    <div class="dark-mode-toggle-wrapper" style="margin-top: auto; margin-bottom: 10px; padding: 10px 12px;">
+    <div style="margin-top: auto; margin-bottom: 10px; padding: 0 4px;">
+        <button id="tour-btn" type="button">
+            <span style="margin-right: 8px;">📚</span> Guide Tour
+        </button>
+    </div>
+    <div class="dark-mode-toggle-wrapper" style="margin-bottom: 10px; padding: 10px 12px;">
         <label class="toggle-switch" for="dark-mode-toggle-input">
             <span class="toggle-label">
                 <span id="dark-mode-icon">🌙</span>
@@ -271,6 +276,34 @@
     .sidebar .logout-btn:hover {
         background: #b85a5a; /* slightly darker on hover */
     }
+    #tour-btn {
+        width: 100%;
+        text-align: left;
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        cursor: pointer;
+        color: #e9f1fa;
+        text-decoration: none;
+        padding: 10px 12px;
+        border-radius: 8px;
+        margin-bottom: 6px;
+        transition: background 0.2s ease;
+        display: block;
+        font-weight: 600;
+        font-size: 0.95rem;
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
+        font-family: inherit;
+        pointer-events: auto;
+        position: relative;
+        z-index: 10;
+    }
+    #tour-btn:hover {
+        background: rgba(255,255,255,0.15);
+    }
+    #tour-btn:active {
+        transform: scale(0.98);
+    }
     .sidebar .nav-group { margin-bottom: 6px; }
     .sidebar .nav-toggle { width: 100%; text-align: left; background: transparent; cursor: pointer; }
     .sidebar .nav-toggle .chevron { float: right; transition: transform 0.2s ease; }
@@ -494,6 +527,19 @@
                 updateDarkModeUI(this.checked);
             });
         }
+
+        // Sidebar dropdown (Sensors) toggle functionality
+        var navToggles = document.querySelectorAll('.nav-toggle');
+        navToggles.forEach(function(toggleBtn) {
+            toggleBtn.addEventListener('click', function(e) {
+                var navGroup = toggleBtn.closest('.nav-group');
+                if (!navGroup) return;
+                var isOpen = navGroup.getAttribute('data-open') === 'true';
+                navGroup.setAttribute('data-open', isOpen ? 'false' : 'true');
+                // Update aria-expanded for accessibility
+                toggleBtn.setAttribute('aria-expanded', (!isOpen).toString());
+            });
+        });
         
         // Sidebar toggle (works on all screen sizes)
         var btn = document.getElementById('menu-toggle');
@@ -607,6 +653,253 @@
         });
     });
     
+    // Tour functionality - define function first
+    function startTour() {
+        // Get current page path to determine which tour to show
+        var currentPath = window.location.pathname;
+        var steps = [];
+        
+        // Dashboard tour steps
+        if (currentPath === '/dashboard' || currentPath.endsWith('/dashboard')) {
+            steps = [
+                {
+                    element: document.querySelector('h1'),
+                    intro: 'Welcome to the Dashboard! This page shows an overview of your water quality data.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#locationSelect'),
+                    intro: 'Select a location to view data for that specific monitoring location.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#timeRangeSelect'),
+                    intro: 'Choose a time range to filter the data (today, last 7 days, etc.).',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#liveStatusBadge'),
+                    intro: 'Check the live status indicator to see if sensors are actively sending data.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('.summary-table'),
+                    intro: 'The summary table shows all locations with their current status and latest metrics.',
+                    position: 'top'
+                },
+                {
+                    element: document.querySelector('#chartsContainer'),
+                    intro: 'View detailed charts for all sensor metrics over time.',
+                    position: 'top'
+                }
+            ];
+        }
+        // Live Readings tour steps
+        else if (currentPath === '/readings' || currentPath.endsWith('/readings')) {
+            steps = [
+                {
+                    element: document.querySelector('h1'),
+                    intro: 'Live Readings shows real-time water quality data from all your active sensors.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#pauseBtn'),
+                    intro: 'Pause or resume auto-refresh to stop the page from updating automatically.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#intervalSelect'),
+                    intro: 'Adjust how often the page updates (every 20s, 40s, or 60s).',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#connectionStatus'),
+                    intro: 'Check connection status to see if sensors are currently sending data.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#sensor_list'),
+                    intro: 'View real-time readings organized by location. Each location shows all sensor metrics.',
+                    position: 'top'
+                }
+            ];
+        }
+        // History tour steps
+        else if (currentPath === '/history' || currentPath.endsWith('/history')) {
+            steps = [
+                {
+                    element: document.querySelector('h1'),
+                    intro: 'History page shows all past sensor readings stored in the database.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('.filter-form'),
+                    intro: 'Use filters to search by device type, status, location, date range, or keywords.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('.card table'),
+                    intro: 'Browse historical readings with details like recorded time, device ID, type, location, value, and status.',
+                    position: 'top'
+                },
+                {
+                    element: document.querySelector('.pagination'),
+                    intro: 'Navigate through multiple pages of results if available.',
+                    position: 'top'
+                }
+            ];
+        }
+        // Sensor Registration tour steps
+        else if (currentPath === '/sensors/register' || currentPath.endsWith('/sensors/register')) {
+            steps = [
+                {
+                    element: document.querySelector('h1'),
+                    intro: 'Welcome! Let\'s register your first sensor. This form will help you add a new IoT device to monitor water quality.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#device_id'),
+                    intro: 'Enter a unique device ID for your sensor (e.g., "sensor-001"). This identifies your device in the system.',
+                    position: 'right'
+                },
+                {
+                    element: document.querySelector('#request_key_btn'),
+                    intro: 'Click "Request Key" to automatically generate encryption keys on your Raspberry Pi device. This enables secure communication.',
+                    position: 'right'
+                },
+                {
+                    element: document.querySelector('#device_type'),
+                    intro: 'Select the type of sensor you\'re registering (e.g., pH, TDS, Temperature). Each type has different measurement ranges.',
+                    position: 'right'
+                },
+                {
+                    element: document.querySelector('#location'),
+                    intro: 'Optionally specify where this sensor is located (e.g., "Plant Room A"). This helps organize multiple sensors.',
+                    position: 'right'
+                },
+                {
+                    element: document.querySelector('#public_key'),
+                    intro: 'The public key will be automatically filled after you click "Request Key". This key is used to verify data from your sensor.',
+                    position: 'top'
+                },
+                {
+                    element: document.querySelector('button[type="submit"]'),
+                    intro: 'Once all fields are filled, click "Register Sensor" to add your device to the system. You can then view it on the Sensors page!',
+                    position: 'top'
+                }
+            ];
+        }
+        // Sensors tour steps
+        else if (currentPath === '/sensors' || currentPath.endsWith('/sensors')) {
+            steps = [
+                {
+                    element: document.querySelector('h1'),
+                    intro: 'Sensors page lets you manage all your registered IoT devices.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('#filter-form'),
+                    intro: 'Search and filter sensors by device ID, type, location, or status.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('a[href*="sensors_register"]'),
+                    intro: 'Click "Register New Sensor" to add a new IoT device to your account.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('table'),
+                    intro: 'View all your sensors with details like device ID, type, location, thresholds, and status. Use Edit to modify settings or Delete to remove sensors.',
+                    position: 'top'
+                }
+            ];
+        }
+        // Profile tour steps
+        else if (currentPath === '/profile' || currentPath.endsWith('/profile')) {
+            steps = [
+                {
+                    element: document.querySelector('h1'),
+                    intro: 'Profile page allows you to update your account information.',
+                    position: 'bottom'
+                },
+                {
+                    element: document.querySelector('input[name="email"]'),
+                    intro: 'Update your email address here.',
+                    position: 'right'
+                },
+                {
+                    element: document.querySelector('input[name="username"]'),
+                    intro: 'Change your username if needed.',
+                    position: 'right'
+                },
+                {
+                    element: document.querySelector('.section-title'),
+                    intro: 'Optionally change your password by entering your current password and a new one.',
+                    position: 'right'
+                },
+                {
+                    element: document.querySelector('button[type="submit"]'),
+                    intro: 'Click "Save changes" to update your profile information.',
+                    position: 'top'
+                }
+            ];
+        }
+        // Default: General navigation tour
+        else {
+            steps = [
+                {
+                    element: document.querySelector('#app-sidebar'),
+                    intro: 'Use the sidebar to navigate between different sections of the application.',
+                    position: 'right'
+                },
+                {
+                    element: document.querySelector('#tour-btn'),
+                    intro: 'Click "Guide Tour" anytime to get help navigating the current page!',
+                    position: 'right'
+                }
+            ];
+        }
+        
+        // Filter out null elements (in case some elements don't exist on the page)
+        steps = steps.filter(function(step) {
+            return step.element !== null && step.element !== undefined;
+        });
+        
+        if (steps.length === 0) {
+            alert('No tour available for this page.');
+            return;
+        }
+        
+        // Use custom tour system
+        if (typeof startTour === 'function') {
+            startTour();
+        } else {
+            alert('Tour feature is loading. Please try again in a moment.');
+        }
+    }
+    
+    // Tour button click handler - attach after DOM is ready
+    document.addEventListener('DOMContentLoaded', function() {
+        var tourBtn = document.getElementById('tour-btn');
+        if (tourBtn) {
+            // Remove any existing onclick handlers
+            tourBtn.onclick = null;
+            tourBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (typeof startTour === 'function') {
+                    startTour();
+                } else {
+                    console.error('startTour function not found');
+                }
+                return false;
+            });
+        }
+    });
+    
+    // Also support inline onclick as fallback
+    window.startTour = startTour;
+    
     // Logout confirmation handler
     async function handleLogout(linkElement) {
         if (typeof showConfirmation === 'undefined') {
@@ -627,6 +920,1040 @@
             window.location.href = linkElement.getAttribute('href');
         }
     }
+</script>
+<!-- Custom Stylish Tour Guide UI -->
+<style>
+    /* Modern Stylish Tour Guide UI - Custom Implementation */
+    :root {
+        --tour-primary-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+        --tour-primary-color: #6366f1;
+        --tour-text-main: var(--text-primary);
+        --tour-text-muted: var(--text-secondary);
+        --tour-bg-surface: var(--bg-secondary);
+        --tour-track-color: var(--bg-tertiary);
+        --tour-shadow-soft: 0 10px 40px -10px rgba(0,0,0,0.15);
+        --tour-radius-lg: 24px;
+        --tour-radius-sm: 12px;
+    }
+
+    /* Tour Overlay (Backdrop) - Dark background only */
+    .tour-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.3);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        opacity: 0;
+        animation: fadeIn 0.4s forwards;
+        z-index: 99997;
+        pointer-events: auto;
+        overflow: hidden; /* Prevent scrolling */
+    }
+
+    /* Blur bands - positioned around clear areas to create spotlight effect */
+    .tour-blur-top,
+    .tour-blur-bottom,
+    .tour-blur-left,
+    .tour-blur-right {
+        position: fixed;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        background: rgba(15, 23, 42, 0.3);
+        pointer-events: none;
+        z-index: 99998;
+    }
+
+    /* Highlight Box for Target Element - Border/glow around the clear area */
+    .tour-highlight {
+        position: fixed;
+        border-radius: 12px;
+        box-shadow: 0 0 0 4px var(--tour-primary-color),
+                    0 8px 32px rgba(99, 102, 241, 0.4);
+        background: transparent;
+        pointer-events: none;
+        z-index: 100000;
+        transition: all 0.3s ease;
+    }
+
+    /* Main Tour Card - Must be on top of everything */
+    .tour-card {
+        background: var(--tour-bg-surface);
+        width: 360px;
+        max-width: 90vw;
+        padding: 28px 24px 24px 24px;
+        border-radius: var(--tour-radius-lg);
+        box-shadow: var(--tour-shadow-soft), 0 4px 16px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.1);
+        text-align: center;
+        position: fixed;
+        transform: translateY(20px);
+        animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        overflow: hidden;
+        z-index: 999999 !important; /* Highest z-index - on top of everything */
+        pointer-events: auto; /* Card itself is clickable */
+    }
+
+    /* Header Icon/Image Area */
+    .tour-icon-wrapper {
+        width: 48px;
+        height: 48px;
+        background: var(--tour-track-color);
+        border-radius: 50%;
+        margin: 0 auto 16px auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        color: var(--tour-primary-color);
+        box-shadow: inset 0 2px 4px rgba(0,0,0,0.05);
+    }
+
+    /* Typography */
+    .tour-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--tour-text-main);
+        margin-bottom: 8px;
+        line-height: 1.3;
+    }
+
+    .tour-desc {
+        font-size: 0.875rem;
+        color: var(--tour-text-muted);
+        line-height: 1.5;
+        margin-bottom: 20px;
+    }
+
+    /* Custom Progress Bar */
+    .progress-container {
+        margin-bottom: 18px;
+    }
+
+    .progress-info {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 6px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--tour-text-muted);
+    }
+
+    .progress-track {
+        height: 6px;
+        background: var(--tour-track-color);
+        border-radius: 8px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .progress-fill {
+        height: 100%;
+        background: var(--tour-primary-gradient);
+        width: 25%;
+        border-radius: 8px;
+        transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+    }
+
+    /* Buttons */
+    .btn-group {
+        display: flex;
+        gap: 12px;
+        margin-top: 10px;
+    }
+
+    .tour-btn {
+        border: none;
+        padding: 10px 16px;
+        border-radius: var(--tour-radius-sm);
+        font-family: inherit;
+        font-weight: 600;
+        font-size: 0.875rem;
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+
+    .tour-btn-secondary {
+        background: transparent;
+        color: var(--tour-text-muted);
+        flex: 1;
+    }
+
+    .tour-btn-secondary:hover:not(:disabled) {
+        background: var(--tour-track-color);
+        color: var(--tour-text-main);
+    }
+
+    .tour-btn-secondary:disabled {
+        opacity: 0.3;
+        cursor: not-allowed;
+    }
+
+    .tour-btn-primary {
+        background: var(--tour-primary-gradient);
+        color: white;
+        flex: 2;
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+    }
+
+    .tour-btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(99, 102, 241, 0.5);
+    }
+
+    .tour-btn-primary:active {
+        transform: translateY(0);
+    }
+
+    /* Skip Link */
+    .skip-btn {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        font-size: 0.8rem;
+        color: var(--tour-text-muted);
+        text-decoration: none;
+        font-weight: 500;
+        cursor: pointer;
+        transition: color 0.2s;
+        background: none;
+        border: none;
+        padding: 0;
+    }
+
+    .skip-btn:hover {
+        color: var(--tour-text-main);
+    }
+
+    /* Text wrapper for fade animation */
+    #tourTextWrapper {
+        animation: fadeText 0.4s ease;
+    }
+
+    /* Animations */
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    @keyframes slideUp {
+        from {
+            transform: translateY(20px);
+            opacity: 0;
+        }
+        to {
+            transform: translateY(0);
+            opacity: 1;
+        }
+    }
+
+    /* Dark mode support */
+    [data-theme="dark"] .tour-card {
+        background: var(--bg-secondary);
+        box-shadow: 0 10px 40px -10px rgba(0,0,0,0.4), 0 4px 16px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.1);
+    }
+
+    [data-theme="dark"] .tour-overlay,
+    [data-theme="dark"] .tour-blur-mask {
+        background: rgba(15, 23, 42, 0.5);
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+        .tour-card {
+            width: 90vw;
+            max-width: 90vw;
+            padding: 24px 20px 20px 20px;
+        }
+
+        .tour-icon-wrapper {
+            width: 40px;
+            height: 40px;
+            font-size: 18px;
+            margin-bottom: 12px;
+        }
+
+        .tour-title {
+            font-size: 1.1rem;
+            margin-bottom: 6px;
+        }
+
+        .tour-desc {
+            font-size: 0.8rem;
+            margin-bottom: 16px;
+        }
+
+        .progress-container {
+            margin-bottom: 16px;
+        }
+
+        .tour-btn {
+            padding: 8px 14px;
+            font-size: 0.8rem;
+        }
+
+        .skip-btn {
+            top: 12px;
+            right: 12px;
+            font-size: 0.75rem;
+        }
+    }
+
+    /* Fade text effect for transitions */
+    @keyframes fadeText {
+        0% {
+            opacity: 0;
+            transform: translateY(5px);
+        }
+        100% {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+</style>
+
+<!-- Tour HTML Structure -->
+<div class="tour-overlay" id="tourOverlay" style="display: none;">
+    <div class="tour-card">
+        <button class="skip-btn" onclick="closeTour()">Skip</button>
+        
+        <div class="tour-icon-wrapper" id="tourIcon">📊</div>
+        
+        <div id="tourTextWrapper">
+            <h2 class="tour-title" id="tourTitle">Welcome</h2>
+            <p class="tour-desc" id="tourDesc">Let's get started with your tour.</p>
+        </div>
+        
+        <div class="progress-container">
+            <div class="progress-info">
+                <span id="stepCount">Step 1</span>
+                <span style="opacity: 0.5;" id="totalSteps">4 Steps total</span>
+            </div>
+            <div class="progress-track">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+        </div>
+        
+        <div class="btn-group">
+            <button class="tour-btn tour-btn-secondary" id="prevBtn" onclick="changeTourStep(-1)" disabled>← Back</button>
+            <button class="tour-btn tour-btn-primary" id="nextBtn" onclick="changeTourStep(1)">Next Step</button>
+        </div>
+    </div>
+</div>
+
+<div class="tour-highlight" id="tourHighlight" style="display: none;"></div>
+<div class="tour-blur-top" id="tourBlurTop" style="display: none;"></div>
+<div class="tour-blur-bottom" id="tourBlurBottom" style="display: none;"></div>
+<div class="tour-blur-left" id="tourBlurLeft" style="display: none;"></div>
+<div class="tour-blur-right" id="tourBlurRight" style="display: none;"></div>
+
+<script>
+    // Custom Tour System
+    let tourSteps = [];
+    let currentTourStep = 0;
+    let tourActive = false;
+
+    function startTour() {
+        // Get current page path to determine which tour to show
+        var currentPath = window.location.pathname;
+        var steps = [];
+        
+        // Dashboard tour steps
+        if (currentPath === '/dashboard' || currentPath.endsWith('/dashboard')) {
+            steps = [
+                {
+                    icon: '📊',
+                    title: 'Water Quality Dashboard',
+                    desc: 'Overview of your water quality data.',
+                    element: document.querySelector('h1'),
+                    position: 'bottom'
+                },
+                {
+                    icon: '📍',
+                    title: 'Location Selector',
+                    desc: 'Select a location to view its data.',
+                    element: document.querySelector('#locationSelect'),
+                    position: 'bottom'
+                },
+                {
+                    icon: '⏰',
+                    title: 'Time Range',
+                    desc: 'Filter data by time period.',
+                    element: document.querySelector('#timeRangeSelect'),
+                    position: 'bottom'
+                },
+                {
+                    icon: '📈',
+                    title: 'Live Status',
+                    desc: 'Check if sensors are sending data.',
+                    element: document.querySelector('#liveStatusBadge'),
+                    position: 'bottom'
+                },
+                {
+                    icon: '📋',
+                    title: 'Summary Table',
+                    desc: 'View all locations with status and metrics.',
+                    element: document.querySelector('.summary-table'),
+                    position: 'top'
+                },
+                {
+                    icon: '📉',
+                    title: 'Charts',
+                    desc: 'View detailed sensor metrics over time.',
+                    element: document.querySelector('#chartsContainer'),
+                    position: 'top'
+                }
+            ];
+        }
+        // Live Readings tour steps
+        else if (currentPath === '/readings' || currentPath.endsWith('/readings')) {
+            steps = [
+                {
+                    icon: '⚡',
+                    title: 'Live Readings',
+                    desc: 'Real-time water quality data.',
+                    element: document.querySelector('h1'),
+                    position: 'auto'
+                },
+                {
+                    icon: '⏸️',
+                    title: 'Pause/Resume',
+                    desc: 'Control auto-refresh.',
+                    element: document.querySelector('#pauseBtn'),
+                    position: 'auto'
+                },
+                {
+                    icon: '📊',
+                    title: 'Sensor Readings',
+                    desc: 'View real-time readings by location.',
+                    element: document.querySelector('#sensor_list'),
+                    position: 'auto'
+                }
+            ];
+        }
+        // History tour steps
+        else if (currentPath === '/history' || currentPath.endsWith('/history')) {
+            steps = [
+                {
+                    icon: '📜',
+                    title: 'History',
+                    desc: 'View past sensor readings.',
+                    element: document.querySelector('h1'),
+                    position: 'auto'
+                },
+                {
+                    icon: '🔍',
+                    title: 'Filters',
+                    desc: 'Search by type, status, or location.',
+                    element: document.querySelector('.filter-form'),
+                    position: 'auto'
+                },
+                {
+                    icon: '📋',
+                    title: 'Data Table',
+                    desc: 'Browse historical readings.',
+                    element: document.querySelector('.card table'),
+                    position: 'auto'
+                }
+            ];
+        }
+        // Sensor Registration tour steps
+        else if (currentPath === '/sensors/register' || currentPath.endsWith('/sensors/register')) {
+            steps = [
+                {
+                    icon: '➕',
+                    title: 'Register Sensor',
+                    desc: 'Add a new IoT device.',
+                    element: document.querySelector('h1'),
+                    position: 'auto'
+                },
+                {
+                    icon: '🆔',
+                    title: 'Device ID',
+                    desc: 'Enter a unique device ID.',
+                    element: document.querySelector('#device_id'),
+                    position: 'auto'
+                },
+                {
+                    icon: '🔑',
+                    title: 'Request Key',
+                    desc: 'Generate encryption keys.',
+                    element: document.querySelector('#request_key_btn'),
+                    position: 'auto'
+                },
+                {
+                    icon: '📡',
+                    title: 'Sensor Type',
+                    desc: 'Select sensor type.',
+                    element: document.querySelector('#device_type'),
+                    position: 'auto'
+                },
+                {
+                    icon: '✅',
+                    title: 'Register',
+                    desc: 'Click to add device.',
+                    element: document.querySelector('button[type="submit"]'),
+                    position: 'auto'
+                }
+            ];
+        }
+        // Sensors tour steps
+        else if (currentPath === '/sensors' || currentPath.endsWith('/sensors')) {
+            steps = [
+                {
+                    icon: '📱',
+                    title: 'Sensors',
+                    desc: 'Manage your IoT devices.',
+                    element: document.querySelector('h1'),
+                    position: 'auto'
+                },
+                {
+                    icon: '➕',
+                    title: 'Register New',
+                    desc: 'Add a new sensor.',
+                    element: document.querySelector('a[href*="sensors_register"]'),
+                    position: 'auto'
+                },
+                {
+                    icon: '📋',
+                    title: 'Sensor List',
+                    desc: 'View and manage all sensors.',
+                    element: document.querySelector('table'),
+                    position: 'auto'
+                }
+            ];
+        }
+        // Profile tour steps
+        else if (currentPath === '/profile' || currentPath.endsWith('/profile')) {
+            steps = [
+                {
+                    icon: '👤',
+                    title: 'Profile',
+                    desc: 'Update your account information.',
+                    element: document.querySelector('h1'),
+                    position: 'auto'
+                },
+                {
+                    icon: '💾',
+                    title: 'Save Changes',
+                    desc: 'Click to save updates.',
+                    element: document.querySelector('button[type="submit"]'),
+                    position: 'auto'
+                }
+            ];
+        }
+        // Default: General navigation tour
+        else {
+            steps = [
+                {
+                    icon: '🧭',
+                    title: 'Navigation',
+                    desc: 'Use the sidebar to navigate between different sections of the application.',
+                    element: document.querySelector('#app-sidebar'),
+                    position: 'right'
+                },
+                {
+                    icon: '📚',
+                    title: 'Guide Tour',
+                    desc: 'Click "Guide Tour" anytime to get help navigating the current page!',
+                    element: document.querySelector('#tour-btn'),
+                    position: 'right'
+                }
+            ];
+        }
+        
+        // Filter out null elements
+        steps = steps.filter(function(step) {
+            return step.element !== null && step.element !== undefined;
+        });
+        
+        if (steps.length === 0) {
+            alert('No tour available for this page.');
+            return;
+        }
+        
+        tourSteps = steps;
+        currentTourStep = 0;
+        tourActive = true;
+        updateTourUI();
+        showTour();
+    }
+
+    function updateTourUI() {
+        if (tourSteps.length === 0) return;
+        
+        const step = tourSteps[currentTourStep];
+        const titleEl = document.getElementById('tourTitle');
+        const descEl = document.getElementById('tourDesc');
+        const iconEl = document.getElementById('tourIcon');
+        const fillEl = document.getElementById('progressFill');
+        const stepCountEl = document.getElementById('stepCount');
+        const totalStepsEl = document.getElementById('totalSteps');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const textWrapper = document.getElementById('tourTextWrapper');
+        
+        // Add animation class
+        textWrapper.classList.remove('fade-text');
+        void textWrapper.offsetWidth; // Trigger reflow
+        textWrapper.classList.add('fade-text');
+        
+        // Update content
+        titleEl.textContent = step.title;
+        descEl.textContent = step.desc;
+        iconEl.textContent = step.icon;
+        stepCountEl.textContent = 'Step ' + (currentTourStep + 1);
+        totalStepsEl.textContent = tourSteps.length + ' Steps total';
+        
+        // Update progress bar
+        const percentage = ((currentTourStep + 1) / tourSteps.length) * 100;
+        fillEl.style.width = percentage + '%';
+        
+        // Update buttons
+        prevBtn.disabled = currentTourStep === 0;
+        
+        if (currentTourStep === tourSteps.length - 1) {
+            nextBtn.textContent = 'Finish Tour';
+        } else {
+            nextBtn.textContent = 'Next Step';
+        }
+        
+        // Update highlight position
+        updateHighlight();
+    }
+
+    function updateHighlight() {
+        // Reset z-index on ALL previous step elements (so they get covered by blur)
+        tourSteps.forEach(function(step, index) {
+            if (step.element && step.element.style && index !== currentTourStep) {
+                step.element.style.zIndex = '';
+                step.element.style.position = '';
+            }
+        });
+        
+        const step = tourSteps[currentTourStep];
+        const element = step.element;
+        const highlight = document.getElementById('tourHighlight');
+        
+        if (!element) {
+            highlight.style.display = 'none';
+            document.getElementById('tourBlurTop').style.display = 'none';
+            document.getElementById('tourBlurBottom').style.display = 'none';
+            document.getElementById('tourBlurLeft').style.display = 'none';
+            document.getElementById('tourBlurRight').style.display = 'none';
+            return;
+        }
+        
+        // Scroll element into view - page is not frozen, so scrolling works naturally
+        element.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'center', 
+            inline: 'nearest' 
+        });
+        
+        // Wait for scroll animation, then update positions
+        setTimeout(() => {
+            updateElementPositions();
+        }, 400);
+        
+        function updateElementPositions() {
+            const rect = element.getBoundingClientRect();
+            const padding = 8; // Extra padding around element
+            
+            // Update highlight box
+            highlight.style.display = 'block';
+            highlight.style.left = (rect.left - padding - 4) + 'px';
+            highlight.style.top = (rect.top - padding - 4) + 'px';
+            highlight.style.width = (rect.width + (padding * 2) + 8) + 'px';
+            highlight.style.height = (rect.height + (padding * 2) + 8) + 'px';
+            
+            // Make sure ONLY the current element is above the blur (higher z-index)
+            // But still below the tour card
+            const currentZIndex = window.getComputedStyle(element).zIndex;
+            if (!currentZIndex || currentZIndex === 'auto') {
+                element.style.position = 'relative';
+                element.style.zIndex = '100000'; // Above blur, below card (999999)
+            }
+            
+            // Position tour card first to get its position (use 'auto' to intelligently position)
+            // This ensures card doesn't cover the element
+            positionTourCard(step.position || 'auto', rect);
+            
+            // Wait for card to be positioned, then update blur bands
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    const card = document.querySelector('.tour-card');
+                    const cardRect = card ? card.getBoundingClientRect() : null;
+                    
+                    // Update blur bands to create holes ONLY for current element and card
+                    updateBlurMask(rect, cardRect, padding);
+                });
+            });
+        }
+    }
+
+    function updateBlurMask(elementRect, cardRect, padding) {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        
+        // Calculate clear areas with padding
+        const elemLeft = Math.max(0, elementRect.left - padding);
+        const elemTop = Math.max(0, elementRect.top - padding);
+        const elemRight = Math.min(width, elementRect.right + padding);
+        const elemBottom = Math.min(height, elementRect.bottom + padding);
+        
+        // Find the combined bounding box that includes both element and card
+        let minLeft = elemLeft;
+        let maxRight = elemRight;
+        let minTop = elemTop;
+        let maxBottom = elemBottom;
+        
+        if (cardRect) {
+            const cardLeft = Math.max(0, cardRect.left - padding);
+            const cardTop = Math.max(0, cardRect.top - padding);
+            const cardRight = Math.min(width, cardRect.right + padding);
+            const cardBottom = Math.min(height, cardRect.bottom + padding);
+            
+            minLeft = Math.min(elemLeft, cardLeft);
+            maxRight = Math.max(elemRight, cardRight);
+            minTop = Math.min(elemTop, cardTop);
+            maxBottom = Math.max(elemBottom, cardBottom);
+        }
+        
+        // Position blur bands around the clear area
+        const blurTop = document.getElementById('tourBlurTop');
+        const blurBottom = document.getElementById('tourBlurBottom');
+        const blurLeft = document.getElementById('tourBlurLeft');
+        const blurRight = document.getElementById('tourBlurRight');
+        
+        // Top band - covers from top of screen to top of clear area
+        blurTop.style.display = minTop > 0 ? 'block' : 'none';
+        blurTop.style.left = '0';
+        blurTop.style.top = '0';
+        blurTop.style.width = width + 'px';
+        blurTop.style.height = minTop + 'px';
+        
+        // Bottom band - covers from bottom of clear area to bottom of screen
+        blurBottom.style.display = maxBottom < height ? 'block' : 'none';
+        blurBottom.style.left = '0';
+        blurBottom.style.top = maxBottom + 'px';
+        blurBottom.style.width = width + 'px';
+        blurBottom.style.height = (height - maxBottom) + 'px';
+        
+        // Left band - covers left side between top and bottom bands
+        blurLeft.style.display = minLeft > 0 ? 'block' : 'none';
+        blurLeft.style.left = '0';
+        blurLeft.style.top = minTop + 'px';
+        blurLeft.style.width = minLeft + 'px';
+        blurLeft.style.height = (maxBottom - minTop) + 'px';
+        
+        // Right band - covers right side between top and bottom bands
+        blurRight.style.display = maxRight < width ? 'block' : 'none';
+        blurRight.style.left = maxRight + 'px';
+        blurRight.style.top = minTop + 'px';
+        blurRight.style.width = (width - maxRight) + 'px';
+        blurRight.style.height = (maxBottom - minTop) + 'px';
+    }
+
+    function positionTourCard(position, elementRect) {
+        const card = document.querySelector('.tour-card');
+        const cardWidth = 360;
+        const cardHeight = 320;
+        const padding = 20;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        
+        // Get sidebar width (check CSS variable or computed style)
+        const sidebar = document.querySelector('.sidebar');
+        const sidebarWidth = sidebar ? (sidebar.offsetWidth || 280) : 280; // Default 280px if not found
+        const sidebarRight = sidebarWidth; // Sidebar ends at this X position
+        
+        let left, top;
+        let autoPosition = position === 'auto' || !position;
+        
+        // Determine best position based on element location if auto-positioning
+        if (autoPosition) {
+            const elementCenterX = elementRect.left + (elementRect.width / 2);
+            const elementCenterY = elementRect.top + (elementRect.height / 2);
+            const viewportCenterX = viewportWidth / 2;
+            const viewportCenterY = viewportHeight / 2;
+            
+            // Check which side has more space (accounting for sidebar)
+            const availableLeft = elementRect.left - sidebarRight; // Space between sidebar and element
+            const spaceLeft = availableLeft > 0 ? availableLeft : 0;
+            const spaceRight = viewportWidth - elementRect.right;
+            const spaceTop = elementRect.top;
+            const spaceBottom = viewportHeight - elementRect.bottom;
+            
+            // Prioritize: if element is on right, put card on left (but not in sidebar); if bottom, put on top
+            if (elementCenterX > viewportCenterX && spaceLeft >= cardWidth + padding) {
+                // Element is on right side, put card on left (between sidebar and element)
+                left = Math.max(sidebarRight + padding, elementRect.left - cardWidth - padding);
+                top = elementRect.top + (elementRect.height / 2) - (cardHeight / 2);
+            } else if (elementCenterX < viewportCenterX && spaceRight >= cardWidth + padding) {
+                // Element is on left side, put card on right
+                left = elementRect.right + padding;
+                top = elementRect.top + (elementRect.height / 2) - (cardHeight / 2);
+            } else if (elementCenterY > viewportCenterY && spaceTop >= cardHeight + padding) {
+                // Element is in bottom half, put card on top
+                left = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                left = Math.max(sidebarRight + padding, left); // Ensure not in sidebar
+                top = Math.max(padding, elementRect.top - cardHeight - padding);
+            } else if (elementCenterY < viewportCenterY && spaceBottom >= cardHeight + padding) {
+                // Element is in top half, put card on bottom
+                left = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                left = Math.max(sidebarRight + padding, left); // Ensure not in sidebar
+                top = elementRect.bottom + padding;
+            } else {
+                // Fallback: try to position to avoid overlap and sidebar
+                if (spaceLeft > spaceRight && spaceLeft >= cardWidth + padding) {
+                    left = Math.max(sidebarRight + padding, elementRect.left - cardWidth - padding);
+                    top = elementRect.top + (elementRect.height / 2) - (cardHeight / 2);
+                } else if (spaceRight >= cardWidth + padding) {
+                    left = elementRect.right + padding;
+                    top = elementRect.top + (elementRect.height / 2) - (cardHeight / 2);
+                } else if (spaceTop > spaceBottom && spaceTop >= cardHeight + padding) {
+                    left = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                    left = Math.max(sidebarRight + padding, left); // Ensure not in sidebar
+                    top = Math.max(padding, elementRect.top - cardHeight - padding);
+                } else {
+                    // Last resort: position below if possible, otherwise above
+                    if (spaceBottom >= cardHeight + padding) {
+                        left = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                        left = Math.max(sidebarRight + padding, left); // Ensure not in sidebar
+                        top = elementRect.bottom + padding;
+                    } else {
+                        left = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                        left = Math.max(sidebarRight + padding, left); // Ensure not in sidebar
+                        top = Math.max(padding, elementRect.top - cardHeight - padding);
+                    }
+                }
+            }
+        } else {
+            // Use specified position
+            switch(position) {
+                case 'top':
+                    left = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                    left = Math.max(sidebarRight + padding, left); // Ensure not in sidebar
+                    top = elementRect.top - cardHeight - padding;
+                    break;
+                case 'bottom':
+                    left = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                    left = Math.max(sidebarRight + padding, left); // Ensure not in sidebar
+                    top = elementRect.bottom + padding;
+                    break;
+                case 'left':
+                    // When positioning left, ensure it's not in sidebar area
+                    left = Math.max(sidebarRight + padding, elementRect.left - cardWidth - padding);
+                    top = elementRect.top + (elementRect.height / 2) - (cardHeight / 2);
+                    break;
+                case 'right':
+                    left = elementRect.right + padding;
+                    top = elementRect.top + (elementRect.height / 2) - (cardHeight / 2);
+                    break;
+                default:
+                    // Center on screen (but not in sidebar)
+                    left = Math.max(sidebarRight + padding, (viewportWidth / 2) - (cardWidth / 2));
+                    top = (viewportHeight / 2) - (cardHeight / 2);
+            }
+        }
+        
+        // Calculate card rectangle for overlap detection
+        let cardRect = {
+            left: left,
+            top: top,
+            right: left + cardWidth,
+            bottom: top + cardHeight
+        };
+        
+        // Check for overlap with element (with safety margin)
+        const safetyMargin = 10;
+        const overlaps = !(cardRect.right < elementRect.left - safetyMargin || 
+                          cardRect.left > elementRect.right + safetyMargin || 
+                          cardRect.bottom < elementRect.top - safetyMargin || 
+                          cardRect.top > elementRect.bottom + safetyMargin);
+        
+        // If overlapping with element, find best alternative position
+        if (overlaps) {
+            const alternatives = [];
+            
+            // Option 1: Right of element
+            const rightX = elementRect.right + padding;
+            if (rightX + cardWidth <= viewportWidth && rightX >= sidebarRight + padding) {
+                alternatives.push({
+                    left: rightX,
+                    top: elementRect.top + (elementRect.height / 2) - (cardHeight / 2),
+                    priority: 1
+                });
+            }
+            
+            // Option 2: Left of element (but right of sidebar)
+            const leftX = Math.max(sidebarRight + padding, elementRect.left - cardWidth - padding);
+            if (leftX >= sidebarRight + padding && leftX + cardWidth <= elementRect.left) {
+                alternatives.push({
+                    left: leftX,
+                    top: elementRect.top + (elementRect.height / 2) - (cardHeight / 2),
+                    priority: 2
+                });
+            }
+            
+            // Option 3: Below element
+            if (elementRect.bottom + padding + cardHeight <= viewportHeight) {
+                const centerX = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                alternatives.push({
+                    left: Math.max(sidebarRight + padding, centerX),
+                    top: elementRect.bottom + padding,
+                    priority: 3
+                });
+            }
+            
+            // Option 4: Above element
+            if (elementRect.top - padding - cardHeight >= 0) {
+                const centerX = elementRect.left + (elementRect.width / 2) - (cardWidth / 2);
+                alternatives.push({
+                    left: Math.max(sidebarRight + padding, centerX),
+                    top: elementRect.top - cardHeight - padding,
+                    priority: 4
+                });
+            }
+            
+            // Choose the best alternative (lowest priority number = best)
+            if (alternatives.length > 0) {
+                alternatives.sort((a, b) => a.priority - b.priority);
+                left = alternatives[0].left;
+                top = alternatives[0].top;
+            }
+        }
+        
+        // Ensure card doesn't cover sidebar
+        left = Math.max(sidebarRight + padding, left);
+        
+        // Final viewport bounds check
+        left = Math.min(left, viewportWidth - cardWidth - padding);
+        top = Math.max(padding, Math.min(top, viewportHeight - cardHeight - padding));
+        
+        // Final overlap check after all adjustments
+        cardRect = { left, top, right: left + cardWidth, bottom: top + cardHeight };
+        const finalOverlap = !(cardRect.right <= elementRect.left - safetyMargin || 
+                              cardRect.left >= elementRect.right + safetyMargin || 
+                              cardRect.bottom <= elementRect.top - safetyMargin || 
+                              cardRect.top >= elementRect.bottom + safetyMargin);
+        
+        // If still overlapping after all attempts, force position away from element
+        if (finalOverlap) {
+            // Try positioning to the right first
+            if (elementRect.right + padding + cardWidth <= viewportWidth) {
+                left = elementRect.right + padding;
+                top = elementRect.top + (elementRect.height / 2) - (cardHeight / 2);
+            } 
+            // If right doesn't work, try left (but right of sidebar)
+            else if (elementRect.left - padding - cardWidth >= sidebarRight + padding) {
+                left = elementRect.left - cardWidth - padding;
+                top = elementRect.top + (elementRect.height / 2) - (cardHeight / 2);
+            }
+            // If horizontal doesn't work, try below
+            else if (elementRect.bottom + padding + cardHeight <= viewportHeight) {
+                left = Math.max(sidebarRight + padding, elementRect.left + (elementRect.width / 2) - (cardWidth / 2));
+                top = elementRect.bottom + padding;
+            }
+            // Last resort: above
+            else if (elementRect.top - padding - cardHeight >= 0) {
+                left = Math.max(sidebarRight + padding, elementRect.left + (elementRect.width / 2) - (cardWidth / 2));
+                top = elementRect.top - cardHeight - padding;
+            }
+            // Absolute last resort: far corner
+            else {
+                if (elementRect.left < viewportWidth / 2) {
+                    left = Math.max(viewportWidth - cardWidth - padding, sidebarRight + padding);
+                } else {
+                    left = sidebarRight + padding;
+                }
+                top = Math.max(padding, Math.min(top, viewportHeight - cardHeight - padding));
+            }
+        }
+        
+        // Ensure card doesn't cover sidebar
+        left = Math.max(sidebarRight + padding, left);
+        
+        // Final viewport bounds check
+        left = Math.min(left, viewportWidth - cardWidth - padding);
+        top = Math.max(padding, Math.min(top, viewportHeight - cardHeight - padding));
+        
+        card.style.position = 'fixed';
+        card.style.left = left + 'px';
+        card.style.top = top + 'px';
+        card.style.zIndex = '999999'; // Highest z-index - on top of everything
+    }
+
+    function changeTourStep(direction) {
+        const newStep = currentTourStep + direction;
+        if (newStep >= 0 && newStep < tourSteps.length) {
+            currentTourStep = newStep;
+            updateTourUI();
+        } else if (newStep >= tourSteps.length) {
+            closeTour();
+        }
+    }
+
+    function showTour() {
+        const overlay = document.getElementById('tourOverlay');
+        overlay.style.display = 'flex';
+        
+        // Page is NOT frozen - users can scroll during tour
+        // This allows better navigation for elements at top/bottom of page
+        
+        setTimeout(() => {
+            updateTourUI();
+        }, 100);
+        
+        // Handle window resize
+        window.addEventListener('resize', handleTourResize);
+    }
+
+    function closeTour() {
+        const overlay = document.getElementById('tourOverlay');
+        const highlight = document.getElementById('tourHighlight');
+        
+        // Reset z-index on all highlighted elements
+        tourSteps.forEach(function(step) {
+            if (step.element && step.element.style) {
+                step.element.style.zIndex = '';
+                step.element.style.position = '';
+            }
+        });
+        
+        // No need to unfreeze - page was never frozen
+        
+        overlay.style.opacity = '0';
+        highlight.style.display = 'none';
+        document.getElementById('tourBlurTop').style.display = 'none';
+        document.getElementById('tourBlurBottom').style.display = 'none';
+        document.getElementById('tourBlurLeft').style.display = 'none';
+        document.getElementById('tourBlurRight').style.display = 'none';
+        setTimeout(() => {
+            overlay.style.display = 'none';
+            tourActive = false;
+        }, 400);
+        window.removeEventListener('resize', handleTourResize);
+    }
+
+    function handleTourResize() {
+        if (tourActive) {
+            // Recalculate positions when window resizes
+            const step = tourSteps[currentTourStep];
+            if (step && step.element) {
+                const rect = step.element.getBoundingClientRect();
+                positionTourCard(step.position || 'auto', rect);
+                updateHighlight();
+            }
+        }
+    }
+
+    // Make functions globally available
+    window.startTour = startTour;
+    window.changeTourStep = changeTourStep;
+    window.closeTour = closeTour;
 </script>
 {% include 'confirmation_dialog.html' %}
 

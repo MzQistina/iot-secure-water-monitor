@@ -25,6 +25,40 @@
         h1 { text-align: center; color: #2a4d69; margin-bottom: 24px; }
         .field { margin-bottom: 16px; }
         label { display: block; color: #355972; margin-bottom: 8px; font-weight: 600; }
+        .label-wrapper { display: flex; align-items: center; gap: 6px; }
+        .required { color: #d32f2f; margin-left: 3px; }
+        .info-btn { 
+            background: transparent; 
+            border: none; 
+            cursor: pointer; 
+            padding: 0; 
+            display: inline-flex; 
+            align-items: center; 
+            justify-content: center;
+            color: #6b8399;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+        }
+        .info-btn:hover { 
+            background: #e3ebf1; 
+            color: #2a4d69;
+        }
+        .info-btn svg { 
+            width: 16px; 
+            height: 16px; 
+        }
+        .field-hint { 
+            font-size: 0.85rem; 
+            color: #6b8399; 
+            margin-top: 4px; 
+            line-height: 1.4;
+            display: none;
+        }
+        .field-hint.show {
+            display: block;
+        }
         input[type="text"], input[type="password"] { width: 100%; padding: 12px 10px; border: 1px solid #cfd9e3; border-radius: 8px; font-size: 1rem; box-sizing: border-box; }
         .btn { width: 100%; background: #2a4d69; color: #fff; border: none; padding: 12px; border-radius: 8px; font-size: 1rem; cursor: pointer; }
         .btn:hover { background: #1e3b52; }
@@ -59,6 +93,17 @@
             .note {
                 font-size: 0.85rem;
             }
+            .field-hint {
+                font-size: 0.8rem;
+            }
+            .info-btn {
+                width: 16px;
+                height: 16px;
+            }
+            .info-btn svg {
+                width: 14px;
+                height: 14px;
+            }
         }
         @media (max-width: 400px) {
             .container {
@@ -80,6 +125,8 @@
         document.addEventListener('DOMContentLoaded', function() {
             var usernameInput = document.getElementById('username');
             if (usernameInput) usernameInput.focus();
+            
+            // Password visibility toggle
             var buttons = document.querySelectorAll('.toggle-visibility');
             buttons.forEach(function(btn){
                 var targetId = btn.getAttribute('data-target');
@@ -93,6 +140,20 @@
                         btn.classList.add('showing');
                     } else {
                         btn.classList.remove('showing');
+                    }
+                });
+            });
+
+            // Info button toggle for instructions
+            var infoButtons = document.querySelectorAll('.info-btn');
+            infoButtons.forEach(function(btn){
+                btn.addEventListener('click', function(e){
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var hintId = btn.getAttribute('data-hint');
+                    var hint = document.getElementById(hintId);
+                    if (hint) {
+                        hint.classList.toggle('show');
                     }
                 });
             });
@@ -129,11 +190,30 @@
         <form method="post" action="{{ url_for('login') }}" autocomplete="off">
             <input type="hidden" name="next" value="{{ next }}">
             <div class="field">
-                <label for="username">Username</label>
+                <div class="label-wrapper">
+                    <label for="username">Username<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show username instructions" data-hint="username-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <input id="username" name="username" type="text" required>
+                <div class="field-hint" id="username-hint">Enter your registered username</div>
             </div>
             <div class="field">
-                <label for="password">Password</label>
+                <div class="label-wrapper">
+                    <label for="password">Password<span class="required">*</span></label>
+                    <button type="button" class="info-btn" aria-label="Show password instructions" data-hint="password-hint">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                    </button>
+                </div>
                 <div class="input-wrap">
                     <input id="password" name="password" type="password" required>
                     <button type="button" class="toggle-visibility" aria-label="Show password" data-target="password">
@@ -147,6 +227,7 @@
                         </svg>
                     </button>
                 </div>
+                <div class="field-hint" id="password-hint">Enter your password</div>
             </div>
             <button type="submit" class="btn">Login</button>
         </form>

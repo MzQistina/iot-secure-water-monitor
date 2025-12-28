@@ -22,9 +22,11 @@ from validation import (
 )
 from functools import wraps
 from typing import Optional
+from utils.auth import login_required
+from utils.session_utils import _issue_device_challenge, _validate_device_session
+from utils.mqtt_utils import _get_mqtt_publish_kwargs
 
 from db import (
-    # insert_reading,  # Removed - using sensor_data table only
     insert_sensor_data,
     create_user,
     get_user_by_username,
@@ -43,7 +45,6 @@ from db import (
     list_recent_sensor_data,
     list_recent_sensor_data_by_location,
     get_locations_with_status,
-    # list_recent_water_readings,  # Removed - using sensor_data table only
     create_device_session,
     get_device_session,
     update_device_session,
@@ -180,6 +181,7 @@ user_latest_data = {}  # user_id -> latest_data dict
 user_latest_by_metric = {}  # user_id -> latest_by_metric dict
 user_latest_by_sensor = {}  # user_id -> latest_by_sensor dict
 
+
 # Legacy global variables (for backward compatibility, will be deprecated)
 latest_data = {}
 latest_by_metric = {}
@@ -189,8 +191,16 @@ key_upload_tokens = {}
 pending_keys = {}  # Global pending keys (device_id -> key) for MQTT/uploads without user context
 user_pending_keys = {}  # User-specific keys (user_id -> {device_id -> key})
 mqtt_thread_started = False
+mqtt_sensor_thread_started = False
 provision_last_sent = {}
 device_challenges = {}
+
+# --- REPLAY ATTACK PROTECTION ---
+# Store recent nonces and timestamps for each device_id (in-memory, resets on restart)
+recent_nonces = {}  # device_id -> set of nonces
+recent_timestamps = {}  # device_id -> last timestamp (ISO8601 string)
+NONCE_CACHE_SIZE = 50  # How many nonces to remember per device
+REPLAY_MAX_SKEW_SECONDS = 120  # Allow up to 2 minutes clock skew
 
 # Directory for storing user-specific key files
 USER_KEYS_DIR = os.path.join(os.path.dirname(__file__), 'user_keys')
@@ -312,63 +322,7 @@ def get_user_key(user_id, device_id):
     return keys.get(device_id)
 
 
-def _get_mqtt_publish_kwargs():
-    """Get MQTT publish configuration including TLS settings."""
-    kwargs = {}
-    
-    # MANUAL CONFIGURATION: Set MQTT credentials directly here
-    # These values are used as fallback if environment variables are not set
-    MQTT_CONFIG = {
-        'host': '192.168.43.214',
-        'port': 8883,
-        'user': 'admin_flask',
-        'password': 'flaske2ee25',
-        'use_tls': True,
-        'tls_insecure': True
-    }
-    
-    # Try to get from environment variables first, fallback to manual config
-    mqtt_host = os.environ.get('MQTT_HOST') or MQTT_CONFIG['host']
-    mqtt_port = int(os.environ.get('MQTT_PORT') or str(MQTT_CONFIG['port']))
-    mqtt_user = os.environ.get('MQTT_USER') or MQTT_CONFIG['user']
-    mqtt_password = os.environ.get('MQTT_PASSWORD') or MQTT_CONFIG['password']
-    mqtt_use_tls = os.environ.get('MQTT_USE_TLS', 'true').lower() in ('true', '1', 'yes') if os.environ.get('MQTT_USE_TLS') else MQTT_CONFIG['use_tls']
-    mqtt_tls_insecure = os.environ.get('MQTT_TLS_INSECURE', 'true').lower() in ('true', '1', 'yes') if os.environ.get('MQTT_TLS_INSECURE') else MQTT_CONFIG['tls_insecure']
-    
-    kwargs['hostname'] = mqtt_host
-    kwargs['port'] = mqtt_port
-    
-    # Authentication - ALWAYS set if we have credentials
-    if mqtt_user and mqtt_password:
-        kwargs['auth'] = {'username': mqtt_user, 'password': mqtt_password}
-    
-    # TLS/SSL configuration
-    mqtt_use_tls = os.environ.get('MQTT_USE_TLS', 'true').lower() in ('true', '1', 'yes') if os.environ.get('MQTT_USE_TLS') else MQTT_CONFIG['use_tls']
-    mqtt_tls_insecure = os.environ.get('MQTT_TLS_INSECURE', 'true').lower() in ('true', '1', 'yes') if os.environ.get('MQTT_TLS_INSECURE') else MQTT_CONFIG['tls_insecure']
-    
-    if mqtt_use_tls:
-        import ssl
-        mqtt_ca_certs = os.environ.get('MQTT_CA_CERTS')
-        mqtt_certfile = os.environ.get('MQTT_CERTFILE')
-        mqtt_keyfile = os.environ.get('MQTT_KEYFILE')
-        
-        tls_config = {}
-        # Always provide ca_certs if available (even in insecure mode, it's still used)
-        if mqtt_ca_certs and os.path.exists(mqtt_ca_certs):
-            tls_config['ca_certs'] = mqtt_ca_certs
-        if mqtt_certfile and os.path.exists(mqtt_certfile):
-            tls_config['certfile'] = mqtt_certfile
-        if mqtt_keyfile and os.path.exists(mqtt_keyfile):
-            tls_config['keyfile'] = mqtt_keyfile
-        tls_config['tls_version'] = ssl.PROTOCOL_TLS
-        # Set cert_reqs to CERT_NONE when insecure mode is enabled
-        if mqtt_tls_insecure:
-            tls_config['cert_reqs'] = ssl.CERT_NONE
-        tls_config['insecure'] = mqtt_tls_insecure
-        
-        kwargs['tls'] = tls_config
-    
-    return kwargs
+# _get_mqtt_publish_kwargs is now in utils/mqtt_utils.py
 
 
 def notify_raspbian_key_cleanup(device_id: str, user_id: int) -> bool:
@@ -397,16 +351,48 @@ def notify_raspbian_key_cleanup(device_id: str, user_id: int) -> bool:
         topic_base = os.environ.get('MQTT_PROVISION_TOPIC_BASE', 'provision')
         delete_topic = f"{topic_base}/{device_id}/delete"
         
-        payload = json.dumps({
+        # Prepare payload dictionary
+        payload_dict = {
             'action': 'delete',
             'device_id': device_id,
             'user_id': str(user_id),
             'timestamp': datetime.utcnow().isoformat()
-        })
+        }
+        
+        # Try to get public_key from database for E2EE encryption
+        # This is important because the key will be deleted from DB after this call
+        device_key_path = None
+        try:
+            sensor = get_sensor_by_device_id(device_id, user_id)
+            if sensor and sensor.get('public_key'):
+                public_key_value = sensor.get('public_key')
+                if public_key_value and len(str(public_key_value).strip()) > 0:
+                    # Create temporary key file for encryption
+                    import tempfile
+                    temp_key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
+                    temp_key_file.write(str(public_key_value))
+                    temp_key_file.close()
+                    device_key_path = temp_key_file.name
+                    print(f"[Delete Notification] ✅ Found public_key in DB, will encrypt message")
+        except Exception as key_err:
+            print(f"[Delete Notification] ⚠️  Could not get key from DB: {key_err}")
+        
+        # Apply E2EE if key was found
+        if device_key_path and os.path.exists(device_key_path):
+            try:
+                from encryption_utils import encrypt_data
+                encrypted_payload = encrypt_data(payload_dict, device_key_path)
+                payload = json.dumps(encrypted_payload)
+                print(f"[Delete Notification] 🔒 Message encrypted with E2EE")
+            except Exception as e2ee_err:
+                print(f"[Delete Notification] ⚠️  E2EE encryption failed: {e2ee_err}, using plaintext")
+                payload = json.dumps(payload_dict)
+        else:
+            payload = json.dumps(payload_dict)
+            print(f"[Delete Notification] ⚠️  No key found, sending plaintext")
         
         print(f"[Delete Notification] Sending MQTT message:")
         print(f"  Topic: {delete_topic}")
-        print(f"  Payload: {payload}")
         
         # Use the same MQTT configuration as provision requests
         publish_kwargs = _get_mqtt_publish_kwargs()
@@ -423,6 +409,29 @@ def notify_raspbian_key_cleanup(device_id: str, user_id: int) -> bool:
 
 
 def start_mqtt_key_subscriber():
+    """Wrapper function for backward compatibility. Calls extracted utility."""
+    global mqtt_thread_started
+    if mqtt_thread_started:
+        return
+    mqtt_key_thread_ref = [mqtt_thread_started]
+    from utils.mqtt_utils import start_mqtt_key_subscriber as _start_mqtt_key_subscriber
+    _start_mqtt_key_subscriber(
+        pending_keys,
+        recent_nonces,
+        recent_timestamps,
+        add_user_key,
+        get_sensor_by_device_id,
+        update_sensor_by_device_id,
+        mqtt_key_thread_ref,
+        NONCE_CACHE_SIZE,
+        REPLAY_MAX_SKEW_SECONDS
+    )
+    mqtt_thread_started = mqtt_key_thread_ref[0]
+    return
+
+# Original implementation removed - now in utils/mqtt_utils.py
+def _old_start_mqtt_key_subscriber():
+    """Old implementation - kept for reference only."""
     global mqtt_thread_started
     if mqtt_thread_started:
         return
@@ -489,7 +498,7 @@ def start_mqtt_key_subscriber():
                 pass
             pem = None
             user_id_from_msg = None
-            # Accept JSON {"device_id":"...","public_key":"PEM","user_id":"..."}
+            # Accept JSON {"device_id":"...","public_key":"PEM","user_id":"...", "nonce":..., "timestamp":...}
             if text.startswith('{'):
                 try:
                     data = json.loads(text)
@@ -502,6 +511,43 @@ def start_mqtt_key_subscriber():
                             user_id_from_msg = int(user_id_raw)
                         except (ValueError, TypeError):
                             user_id_from_msg = None
+                    # --- REPLAY PROTECTION ---
+                    nonce = data.get('nonce')
+                    timestamp = data.get('timestamp')
+                    if device_id and (nonce or timestamp):
+                        # Check nonce replay
+                        if nonce:
+                            nonces = recent_nonces.setdefault(device_id, set())
+                            if nonce in nonces:
+                                print(f"[REPLAY BLOCKED] Duplicate nonce for device {device_id}: {nonce}")
+                                return
+                        # Check timestamp replay
+                        if timestamp:
+                            try:
+                                from datetime import datetime, timezone
+                                ts = datetime.fromisoformat(timestamp)
+                                now = datetime.now(timezone.utc)
+                                skew = abs((now - ts).total_seconds())
+                                if skew > REPLAY_MAX_SKEW_SECONDS:
+                                    print(f"[REPLAY BLOCKED] Timestamp too old or far in future for device {device_id}: {timestamp}")
+                                    return
+                                # Optionally, block if timestamp not newer than last
+                                last_ts = recent_timestamps.get(device_id)
+                                if last_ts:
+                                    last_dt = datetime.fromisoformat(last_ts)
+                                    if ts <= last_dt:
+                                        print(f"[REPLAY BLOCKED] Timestamp not newer than previous for device {device_id}: {timestamp}")
+                                        return
+                                recent_timestamps[device_id] = timestamp
+                            except Exception as ts_err:
+                                print(f"[REPLAY WARNING] Could not parse timestamp for device {device_id}: {timestamp} ({ts_err})")
+                        # Store nonce (limit cache size)
+                        if nonce:
+                            nonces.add(nonce)
+                            if len(nonces) > NONCE_CACHE_SIZE:
+                                # Remove oldest (not strictly ordered, but set pop is fine for small cache)
+                                while len(nonces) > NONCE_CACHE_SIZE:
+                                    nonces.pop()
                 except Exception:
                     pem = None
             else:
@@ -688,6 +734,32 @@ def start_mqtt_key_subscriber():
     mqtt_thread_started = True
 
 
+def start_mqtt_sensor_subscriber():
+    """Wrapper function for backward compatibility. Calls extracted utility."""
+    global mqtt_sensor_thread_started
+    if mqtt_sensor_thread_started:
+        return
+    mqtt_sensor_thread_ref = [mqtt_sensor_thread_started]
+    from utils.mqtt_utils import start_mqtt_sensor_subscriber as _start_mqtt_sensor_subscriber
+    _start_mqtt_sensor_subscriber(
+        list_sensors,
+        insert_sensor_data,
+        _validate_device_session,
+        build_effective_thresholds_for_sensor,
+        _build_type_defaults_map,
+        compute_safety,
+        latest_by_metric,
+        latest_by_sensor,
+        user_latest_by_metric,
+        user_latest_by_sensor,
+        user_latest_data,
+        mqtt_sensor_thread_ref,
+        REQUIRE_DEVICE_SESSION
+    )
+    mqtt_sensor_thread_started = mqtt_sensor_thread_ref[0]
+    return
+
+
  
 
 # Use a relative path to the private key
@@ -719,8 +791,8 @@ def set_security_headers(response):
     # Allow Chart.js CDN for dashboard graphs and source maps
     csp_policy = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "  # Allow Chart.js CDN
-        "style-src 'self' 'unsafe-inline'; "   # unsafe-inline needed for inline styles
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "  # Allow Chart.js and Intro.js CDN
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "   # Allow Intro.js CSS from CDN
         "img-src 'self' data:; "
         "font-src 'self' data:; "
         "connect-src 'self' https://cdn.jsdelivr.net; "  # Allow Chart.js source map connections
@@ -752,168 +824,16 @@ REQUIRE_DEVICE_SESSION = (os.environ.get('REQUIRE_DEVICE_SESSION', 'false') or '
 DEVICE_SESSION_TTL_SECONDS = int(os.environ.get('DEVICE_SESSION_TTL_SECONDS', '900'))
 DEVICE_CHALLENGE_TTL_SECONDS = int(os.environ.get('DEVICE_CHALLENGE_TTL_SECONDS', '60'))
 
-def login_required(view_func):
-    def wrapped_view(*args, **kwargs):
-        import sys
-        import traceback
-        try:
-            # Check session
-            username = session.get('user')
-            user_id = session.get('user_id')
-            
-            # Only log for provision endpoints to reduce noise
-            if '/provision/' in request.path:
-                app.logger.error(f"[login_required] Checking auth for {request.path} - username: {username}, user_id: {user_id}")
-                print(f"[login_required] Checking auth for {request.path} - username: {username}, user_id: {user_id}", file=sys.stderr)
-                sys.stderr.flush()
-            
-            if not username:
-                # For API endpoints, return JSON instead of redirect
-                if request.path.startswith('/api/'):
-                    return jsonify({"error": "Authentication required", "message": "Please log in to access this resource"}), 401
-                next_url = request.path
-                return redirect(url_for('login', next=next_url))
-            
-            # Ensure user_id is set in session (critical for user isolation)
-            if not user_id:
-                user = get_user_by_username(username)
-                if user:
-                    session['user_id'] = user['sr_no']
-                    session.permanent = True  # Make session persistent
-                    if '/provision/' in request.path:
-                        print(f"[login_required] Set user_id {user['sr_no']} for username {username}", file=sys.stderr)
-                        sys.stderr.flush()
-                else:
-                    if '/provision/' in request.path:
-                        print(f"[login_required] ERROR: User '{username}' not found in database!", file=sys.stderr)
-                        sys.stderr.flush()
-                    session.clear()  # Clear invalid session
-                    # For API endpoints, return JSON instead of redirect
-                    if request.path.startswith('/api/'):
-                        return jsonify({"error": "Invalid session", "message": "User not found in database"}), 401
-                    return redirect(url_for('login'))
-            
-            # Double-check: verify user_id matches username (security check)
-            if user_id:
-                user = get_user_by_username(username)
-                if user and user['sr_no'] != user_id:
-                    if '/provision/' in request.path:
-                        print(f"[login_required] ERROR: Session mismatch! username={username}, session_user_id={user_id}, db_user_id={user['sr_no']}", file=sys.stderr)
-                        sys.stderr.flush()
-                    session.clear()  # Clear corrupted session
-                    # For API endpoints, return JSON instead of redirect
-                    if request.path.startswith('/api/'):
-                        return jsonify({"error": "Session mismatch", "message": "Session validation failed"}), 401
-                    return redirect(url_for('login'))
-            
-            # Call the actual view function
-            if '/provision/' in request.path:
-                print(f"[login_required] ✅ Auth passed, calling view function for {request.path}", file=sys.stderr)
-                sys.stderr.flush()
-            try:
-                result = view_func(*args, **kwargs)
-                if '/provision/' in request.path:
-                    print(f"[login_required] ✅ View function returned successfully", file=sys.stderr)
-                    sys.stderr.flush()
-                return result
-            except Exception as view_exc:
-                if '/provision/' in request.path:
-                    print(f"[login_required] ❌ Exception in view function: {view_exc}", file=sys.stderr)
-                    print(f"[login_required] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
-                    sys.stderr.flush()
-                raise  # Re-raise to be handled by global error handler
-        except Exception as e:
-            # Catch any exception in the decorator itself
-            error_msg = f"Exception in login_required decorator: {str(e)}"
-            print("=" * 80, file=sys.stderr)
-            print(f"[login_required] ❌ {error_msg}", file=sys.stderr)
-            print(f"[login_required] Traceback:\n{traceback.format_exc()}", file=sys.stderr)
-            print("=" * 80, file=sys.stderr)
-            sys.stderr.flush()
-            # Re-raise to be caught by global error handler
-            raise
-    # Preserve original function name for Flask routing/debug
-    wrapped_view.__name__ = getattr(view_func, '__name__', 'wrapped_view')
-    return wrapped_view
-
-
-def _issue_device_challenge(device_id: str):
-    challenge_id = secrets.token_urlsafe(16)
-    challenge = secrets.token_urlsafe(32)
-    device_challenges[challenge_id] = {
-        'device_id': device_id,
-        'challenge': challenge,
-        'expires_at': datetime.utcnow() + timedelta(seconds=DEVICE_CHALLENGE_TTL_SECONDS),
-    }
-    return challenge_id, challenge
-
-
-def _validate_device_session(session_token: Optional[str], device_id: Optional[str], counter_value):
-    """Validate device session from database. Returns (is_valid, reason)."""
-    if not session_token:
-        return False, "missing_session"
-    
-    # Get session from database
-    sess = get_device_session(session_token)
-    if not sess:
-        return False, "invalid_session"
-    
-    # Check device match
-    if not device_id or sess.get('device_id') != device_id:
-        return False, "device_mismatch"
-    
-    # Check expiration (handle both datetime object and string)
-    expires_at = sess.get('expires_at')
-    if not isinstance(expires_at, datetime):
-        if isinstance(expires_at, str):
-            try:
-                # Try multiple formats
-                for fmt in ['%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S']:
-                    try:
-                        expires_at = datetime.strptime(expires_at, fmt)
-                        break
-                    except ValueError:
-                        continue
-                if isinstance(expires_at, str):
-                    expires_at = datetime.utcnow()
-            except Exception:
-                expires_at = datetime.utcnow()
-        else:
-            expires_at = datetime.utcnow()
-    
-    if datetime.utcnow() > expires_at:
-        # Clean up expired session
-        try:
-            delete_device_session(session_token)
-        except Exception:
-            pass
-        return False, "session_expired"
-    
-    # Validate counter if provided
-    if counter_value is not None:
-        try:
-            cval = int(counter_value)
-        except Exception:
-            return False, "counter_invalid"
-        last = int(sess.get('counter') or 0)
-        if cval <= last:
-            return False, "counter_reused"
-        
-        # Update session with new counter and sliding expiration
-        # Pass TTL seconds instead of datetime to ensure timezone consistency with MySQL NOW()
-        update_device_session(session_token, cval, DEVICE_SESSION_TTL_SECONDS)
-    else:
-        # Still update expiration on use (sliding expiration)
-        # Pass TTL seconds instead of datetime to ensure timezone consistency with MySQL NOW()
-        update_device_session(session_token, sess.get('counter', 0), DEVICE_SESSION_TTL_SECONDS)
-    
-    return True, "ok"
+# login_required, _issue_device_challenge, and _validate_device_session are now imported from utils
 
 
 @app.route('/api/device/session/request', methods=['GET'])
 def api_device_session_request():
+    """Request a device session. Returns challenge for secure flow, or direct token if skip_challenge=true."""
     try:
         device_id = sanitize_input(request.args.get('device_id') or '')
+        skip_challenge = request.args.get('skip_challenge', 'false').lower() in ('true', '1', 'yes')
+        
         device_id_valid, device_id_error = validate_device_id(device_id)
         if not device_id_valid:
             return jsonify({"error": device_id_error or "Invalid device_id."}), 400
@@ -954,9 +874,33 @@ def api_device_session_request():
                     "error": f"device '{device_id}' not found in database"
                 }), 403
         
-        # Issue challenge - signature verification in establish will identify which sensor
+        # If skip_challenge=true, directly issue session token (for simulators)
+        if skip_challenge:
+            # Direct session token generation (simpler flow for simulators)
+            import secrets
+            max_attempts = 10
+            session_token = None
+            expires_at_ttl = DEVICE_SESSION_TTL_SECONDS
+            
+            for _ in range(max_attempts):
+                candidate = secrets.token_urlsafe(48)
+                # Try to create session in database (pass TTL seconds, not datetime)
+                if create_device_session(candidate, device_id, expires_at_ttl):
+                    session_token = candidate
+                    break
+            
+            if not session_token:
+                return jsonify({"error": "failed to generate unique session token"}), 500
+            
+            return jsonify({
+                "session_token": session_token,
+                "device_id": device_id,
+                "expires_in_seconds": DEVICE_SESSION_TTL_SECONDS,
+            })
+        
+        # Default: Issue challenge - signature verification in establish will identify which sensor
         try:
-            challenge_id, challenge = _issue_device_challenge(device_id)
+            challenge_id, challenge = _issue_device_challenge(device_id, device_challenges)
         except Exception as challenge_err:
             print(f"ERROR: Challenge generation error: {challenge_err}")
             import traceback
@@ -1321,119 +1265,187 @@ def _send_provision_message(action: str):
     # Prepare payload dictionary
     payload_dict = {"device_id": device_id, "action": action, "user_id": str(user_id)}
     
-    # Apply E2EE if device key exists (for "update" and "delete" actions)
-    # Note: "request" actions may not have keys yet (chicken-and-egg problem)
+    # Apply E2EE if device key exists (for ALL actions if key is available)
+    # Note: "request" actions typically don't have keys yet (chicken-and-egg problem),
+    # but we check anyway in case keys were pre-provisioned
     payload = None
     use_e2ee = False
     device_key_path = None
+    key_source = None
     
-    if action in ('update', 'delete'):
-        # Check multiple locations for device public key (same logic as session establishment)
-        device_key_path = None
-        key_source = None
-        
-        # Debug: Log all search paths
-        app.logger.error(f"[Provision {action_title}] 🔍 Searching for key for device_id='{device_id}', user_id='{user_id}'")
-        print(f"[Provision {action_title}] 🔍 Searching for key for device_id='{device_id}', user_id='{user_id}'", file=sys.stderr)
-        
-        # 1. Check user_keys/{user_id}/{device_id}_public.pem (Flask's primary location)
-        user_key_path = get_user_key_file(user_id, device_id)
-        app.logger.error(f"[Provision {action_title}]   Checking: {user_key_path} (exists: {os.path.exists(user_key_path)})")
-        print(f"[Provision {action_title}]   Checking: {user_key_path} (exists: {os.path.exists(user_key_path)})", file=sys.stderr)
-        if os.path.exists(user_key_path):
-            device_key_path = user_key_path
-            key_source = f"user_keys/{user_id}/{device_id}_public.pem"
-        
-        # 2. Check sensor_keys/{user_id}/{device_id}/sensor_public.pem (provision agent location)
-        if not device_key_path:
-            sensor_pub_path_user = os.path.join(os.path.dirname(__file__), "sensor_keys", str(user_id), device_id, "sensor_public.pem")
-            app.logger.error(f"[Provision {action_title}]   Checking: {sensor_pub_path_user} (exists: {os.path.exists(sensor_pub_path_user)})")
-            print(f"[Provision {action_title}]   Checking: {sensor_pub_path_user} (exists: {os.path.exists(sensor_pub_path_user)})", file=sys.stderr)
-            if os.path.exists(sensor_pub_path_user):
-                device_key_path = sensor_pub_path_user
-                key_source = f"sensor_keys/{user_id}/{device_id}/sensor_public.pem"
-        
-        # 3. Fallback to global sensor_keys/{device_id}/sensor_public.pem (legacy)
-        if not device_key_path:
-            sensor_pub_path = os.path.join(os.path.dirname(__file__), "sensor_keys", device_id, "sensor_public.pem")
-            app.logger.error(f"[Provision {action_title}]   Checking: {sensor_pub_path} (exists: {os.path.exists(sensor_pub_path)})")
-            print(f"[Provision {action_title}]   Checking: {sensor_pub_path} (exists: {os.path.exists(sensor_pub_path)})", file=sys.stderr)
-            if os.path.exists(sensor_pub_path):
-                device_key_path = sensor_pub_path
-                key_source = f"sensor_keys/{device_id}/sensor_public.pem"
-        
-        # 4. Fallback to in-memory pending_keys (if key was just received via MQTT but not yet saved to file)
-        if not device_key_path:
-            app.logger.error(f"[Provision {action_title}]   Checking pending_keys (device_id in pending_keys: {device_id in pending_keys})")
-            print(f"[Provision {action_title}]   Checking pending_keys (device_id in pending_keys: {device_id in pending_keys})", file=sys.stderr)
-            if device_id in pending_keys:
-                try:
-                    # Create temporary key file for encryption
-                    import tempfile
-                    temp_key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
-                    temp_key_file.write(pending_keys[device_id])
-                    temp_key_file.close()
-                    device_key_path = temp_key_file.name
-                    key_source = f"pending_keys (in-memory, temp file: {device_key_path})"
-                    app.logger.error(f"[Provision {action_title}] ✅ Using in-memory pending key for {device_id}")
-                    print(f"[Provision {action_title}] ✅ Using in-memory pending key for {device_id}", file=sys.stderr)
-                except Exception as temp_err:
-                    app.logger.error(f"[Provision {action_title}] ❌ Failed to create temp key file: {temp_err}")
-                    print(f"[Provision {action_title}] ❌ Failed to create temp key file: {temp_err}", file=sys.stderr)
-        
-        # 5. Fallback to database (if key is in DB but not in filesystem)
-        if not device_key_path:
-            app.logger.error(f"[Provision {action_title}]   Checking database for key...")
-            print(f"[Provision {action_title}]   Checking database for key...", file=sys.stderr)
-            try:
-                srow = get_sensor_by_device_id(device_id, user_id)
-                has_key = srow and srow.get('public_key')
-                app.logger.error(f"[Provision {action_title}]   Database query result: sensor found={srow is not None}, has_key={bool(has_key)}")
-                print(f"[Provision {action_title}]   Database query result: sensor found={srow is not None}, has_key={bool(has_key)}", file=sys.stderr)
+    # Check for device public key for ALL actions (request, update, delete)
+    # This allows E2EE for "request" if keys are pre-provisioned
+    # Check multiple locations for device public key (same logic as session establishment)
+    # Debug: Log all search paths
+    app.logger.error(f"[Provision {action_title}] 🔍 Searching for key for device_id='{device_id}', user_id='{user_id}'")
+    print(f"[Provision {action_title}] 🔍 Searching for key for device_id='{device_id}', user_id='{user_id}'", file=sys.stderr)
+    
+    # PRIORITY 1: Check database FIRST (since user confirmed key is stored in DB)
+    # This is especially important for delete operations where filesystem keys may have been cleaned up
+    if not device_key_path:
+        app.logger.error(f"[Provision {action_title}]   [PRIORITY 1] Checking database for key...")
+        print(f"[Provision {action_title}]   [PRIORITY 1] Checking database for key...", file=sys.stderr)
+        try:
+            # Ensure user_id is int for database query
+            user_id_int = int(user_id) if user_id is not None else None
+            srow = get_sensor_by_device_id(device_id, user_id_int)
+            if srow:
+                app.logger.error(f"[Provision {action_title}]   Database query: sensor found (id={srow.get('id')}, user_id={srow.get('user_id')}, status={srow.get('status')})")
+                print(f"[Provision {action_title}]   Database query: sensor found (id={srow.get('id')}, user_id={srow.get('user_id')}, status={srow.get('status')})", file=sys.stderr)
+                
+                public_key_value = srow.get('public_key')
+                has_key = public_key_value and len(str(public_key_value).strip()) > 0
+                
+                if public_key_value:
+                    key_length = len(str(public_key_value))
+                    app.logger.error(f"[Provision {action_title}]   Public key in DB: length={key_length} chars")
+                    print(f"[Provision {action_title}]   Public key in DB: length={key_length} chars", file=sys.stderr)
+                else:
+                    app.logger.error(f"[Provision {action_title}]   Public key in DB: NULL or empty")
+                    print(f"[Provision {action_title}]   Public key in DB: NULL or empty", file=sys.stderr)
+                
+                app.logger.error(f"[Provision {action_title}]   Database query result: sensor found={srow is not None}, has_key={has_key}")
+                print(f"[Provision {action_title}]   Database query result: sensor found={srow is not None}, has_key={has_key}", file=sys.stderr)
+                
                 if has_key:
                     try:
                         # Create temporary key file for encryption
                         import tempfile
                         temp_key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
-                        temp_key_file.write(srow.get('public_key'))
+                        temp_key_file.write(str(public_key_value))
                         temp_key_file.close()
                         device_key_path = temp_key_file.name
                         key_source = f"database (temp file: {device_key_path})"
-                        app.logger.error(f"[Provision {action_title}] ✅ Using database key for {device_id}")
-                        print(f"[Provision {action_title}] ✅ Using database key for {device_id}", file=sys.stderr)
+                        app.logger.error(f"[Provision {action_title}] ✅ Using database key for {device_id} (key length: {key_length})")
+                        print(f"[Provision {action_title}] ✅ Using database key for {device_id} (key length: {key_length})", file=sys.stderr)
                     except Exception as temp_err:
                         app.logger.error(f"[Provision {action_title}] ❌ Failed to create temp key file from DB: {temp_err}")
                         print(f"[Provision {action_title}] ❌ Failed to create temp key file from DB: {temp_err}", file=sys.stderr)
-            except Exception as db_err:
+                        import traceback
+                        app.logger.error(f"[Provision {action_title}] Traceback: {traceback.format_exc()}")
+                        print(f"[Provision {action_title}] Traceback: {traceback.format_exc()}", file=sys.stderr)
+                else:
+                    app.logger.error(f"[Provision {action_title}] ⚠️  Sensor found in DB but public_key is NULL or empty")
+                    print(f"[Provision {action_title}] ⚠️  Sensor found in DB but public_key is NULL or empty", file=sys.stderr)
+            else:
+                app.logger.error(f"[Provision {action_title}]   Database query: sensor NOT found (device_id='{device_id}', user_id={user_id})")
+                print(f"[Provision {action_title}]   Database query: sensor NOT found (device_id='{device_id}', user_id={user_id})", file=sys.stderr)
+        except Exception as db_err:
                 app.logger.error(f"[Provision {action_title}] ❌ Failed to query database for key: {db_err}")
                 print(f"[Provision {action_title}] ❌ Failed to query database for key: {db_err}", file=sys.stderr)
-        
-        if device_key_path:
-            try:
-                # Encrypt payload with E2EE
-                encrypted_payload = encrypt_data(payload_dict, device_key_path)
-                payload = json.dumps(encrypted_payload)
-                use_e2ee = True
-                app.logger.error(f"[Provision {action_title}] ✅ E2EE encryption applied (key found: {key_source})")
-                print(f"[Provision {action_title}] ✅ E2EE encryption applied (key found: {key_source})", file=sys.stderr)
-            except Exception as e2ee_err:
-                # If encryption fails, fall back to plaintext
-                app.logger.error(f"[Provision {action_title}] ⚠️  E2EE encryption failed: {e2ee_err}, falling back to plaintext")
-                print(f"[Provision {action_title}] ⚠️  E2EE encryption failed: {e2ee_err}, falling back to plaintext", file=sys.stderr)
                 import traceback
                 app.logger.error(f"[Provision {action_title}] Traceback: {traceback.format_exc()}")
+                print(f"[Provision {action_title}] Traceback: {traceback.format_exc()}", file=sys.stderr)
+    
+    # PRIORITY 2: Check user_keys/{user_id}/{device_id}_public.pem (Flask's primary location)
+    if not device_key_path:
+        user_key_path = get_user_key_file(user_id, device_id)
+        app.logger.error(f"[Provision {action_title}]   [PRIORITY 2] Checking: {user_key_path} (exists: {os.path.exists(user_key_path)})")
+        print(f"[Provision {action_title}]   [PRIORITY 2] Checking: {user_key_path} (exists: {os.path.exists(user_key_path)})", file=sys.stderr)
+        if os.path.exists(user_key_path):
+            device_key_path = user_key_path
+            key_source = f"user_keys/{user_id}/{device_id}_public.pem"
+    
+    # PRIORITY 3: Check sensor_keys/{user_id}/{device_id}/sensor_public.pem (provision agent location)
+    if not device_key_path:
+        sensor_pub_path_user = os.path.join(os.path.dirname(__file__), "sensor_keys", str(user_id), device_id, "sensor_public.pem")
+        app.logger.error(f"[Provision {action_title}]   [PRIORITY 3] Checking: {sensor_pub_path_user} (exists: {os.path.exists(sensor_pub_path_user)})")
+        print(f"[Provision {action_title}]   [PRIORITY 3] Checking: {sensor_pub_path_user} (exists: {os.path.exists(sensor_pub_path_user)})", file=sys.stderr)
+        if os.path.exists(sensor_pub_path_user):
+            device_key_path = sensor_pub_path_user
+            key_source = f"sensor_keys/{user_id}/{device_id}/sensor_public.pem"
+    
+    # PRIORITY 4: Fallback to global sensor_keys/{device_id}/sensor_public.pem (legacy)
+    if not device_key_path:
+            sensor_pub_path = os.path.join(os.path.dirname(__file__), "sensor_keys", device_id, "sensor_public.pem")
+            app.logger.error(f"[Provision {action_title}]   [PRIORITY 4] Checking: {sensor_pub_path} (exists: {os.path.exists(sensor_pub_path)})")
+            print(f"[Provision {action_title}]   [PRIORITY 4] Checking: {sensor_pub_path} (exists: {os.path.exists(sensor_pub_path)})", file=sys.stderr)
+            if os.path.exists(sensor_pub_path):
+                device_key_path = sensor_pub_path
+                key_source = f"sensor_keys/{device_id}/sensor_public.pem"
+    
+    # PRIORITY 5: Fallback to in-memory pending_keys (if key was just received via MQTT but not yet saved to file)
+    # This is especially important for unregistered devices where key is only in pending_keys
+    if not device_key_path:
+        app.logger.error(f"[Provision {action_title}]   [PRIORITY 5] Checking pending_keys (device_id in pending_keys: {device_id in pending_keys})")
+        print(f"[Provision {action_title}]   [PRIORITY 5] Checking pending_keys (device_id in pending_keys: {device_id in pending_keys})", file=sys.stderr)
+        if device_id in pending_keys:
+            try:
+                # Create temporary key file for encryption
+                import tempfile
+                temp_key_file = tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False)
+                temp_key_file.write(pending_keys[device_id])
+                temp_key_file.close()
+                device_key_path = temp_key_file.name
+                key_source = f"pending_keys (in-memory, temp file: {device_key_path})"
+                app.logger.error(f"[Provision {action_title}] ✅ Using in-memory pending key for {device_id}")
+                print(f"[Provision {action_title}] ✅ Using in-memory pending key for {device_id}", file=sys.stderr)
+            except Exception as temp_err:
+                app.logger.error(f"[Provision {action_title}] ❌ Failed to create temp key file: {temp_err}")
+                print(f"[Provision {action_title}] ❌ Failed to create temp key file: {temp_err}", file=sys.stderr)
+    
+    # Apply E2EE if key was found (for ALL actions: request, update, delete)
+    if device_key_path:
+            # Verify key file still exists and is readable
+            if not os.path.exists(device_key_path):
+                app.logger.error(f"[Provision {action_title}] ⚠️  Key file disappeared: {device_key_path} (was found but no longer exists)")
+                print(f"[Provision {action_title}] ⚠️  Key file disappeared: {device_key_path} (was found but no longer exists)", file=sys.stderr)
                 payload = json.dumps(payload_dict)
+            else:
+                try:
+                    # Verify key file is readable and not empty
+                    key_size = os.path.getsize(device_key_path)
+                    app.logger.error(f"[Provision {action_title}]   Key file size: {key_size} bytes")
+                    print(f"[Provision {action_title}]   Key file size: {key_size} bytes", file=sys.stderr)
+                    
+                    if key_size == 0:
+                        app.logger.error(f"[Provision {action_title}] ⚠️  Key file is empty: {device_key_path}")
+                        print(f"[Provision {action_title}] ⚠️  Key file is empty: {device_key_path}", file=sys.stderr)
+                        payload = json.dumps(payload_dict)
+                    else:
+                        # Encrypt payload with E2EE
+                        encrypted_payload = encrypt_data(payload_dict, device_key_path)
+                        payload = json.dumps(encrypted_payload)
+                        use_e2ee = True
+                        app.logger.error(f"[Provision {action_title}] ✅ E2EE encryption applied (key found: {key_source}, size: {key_size} bytes)")
+                        print(f"[Provision {action_title}] ✅ E2EE encryption applied (key found: {key_source}, size: {key_size} bytes)", file=sys.stderr)
+                except Exception as e2ee_err:
+                    # If encryption fails, fall back to plaintext
+                    app.logger.error(f"[Provision {action_title}] ⚠️  E2EE encryption failed: {e2ee_err}, falling back to plaintext")
+                    print(f"[Provision {action_title}] ⚠️  E2EE encryption failed: {e2ee_err}, falling back to plaintext", file=sys.stderr)
+                    import traceback
+                    app.logger.error(f"[Provision {action_title}] Traceback: {traceback.format_exc()}")
+                    print(f"[Provision {action_title}] Traceback: {traceback.format_exc()}", file=sys.stderr)
+                    payload = json.dumps(payload_dict)
+    else:
+        # Key doesn't exist in any location
+        # For "request" actions: Use server public key for E2EE (provision agent has server private key)
+        # For "update"/"delete" actions: Fall back to plaintext (key should exist)
+        if action == 'request':
+            # Try to use server public key for encrypting "request" messages
+            server_public_key_path = os.path.join(os.path.dirname(__file__), 'keys', 'public.pem')
+            if os.path.exists(server_public_key_path):
+                try:
+                    encrypted_payload = encrypt_data(payload_dict, server_public_key_path)
+                    payload = json.dumps(encrypted_payload)
+                    use_e2ee = True
+                    key_source = "server public key (keys/public.pem)"
+                    app.logger.error(f"[Provision {action_title}] ✅ E2EE encryption applied using server public key")
+                    print(f"[Provision {action_title}] ✅ E2EE encryption applied using server public key", file=sys.stderr)
+                except Exception as e2ee_err:
+                    app.logger.error(f"[Provision {action_title}] ⚠️  Server key encryption failed: {e2ee_err}, using plaintext")
+                    print(f"[Provision {action_title}] ⚠️  Server key encryption failed: {e2ee_err}, using plaintext", file=sys.stderr)
+                    payload = json.dumps(payload_dict)
         else:
-            # Key doesn't exist in any location, use plaintext
+                payload = json.dumps(payload_dict)
+                app.logger.error(f"[Provision {action_title}] ⚠️  E2EE not applied (server public key not found at {server_public_key_path}), using plaintext")
+                print(f"[Provision {action_title}] ⚠️  E2EE not applied (server public key not found at {server_public_key_path}), using plaintext", file=sys.stderr)
+        else:
+            # For "update"/"delete": key should exist, but fall back to plaintext if not found
             payload = json.dumps(payload_dict)
             app.logger.error(f"[Provision {action_title}] ⚠️  E2EE not applied (key not found in any location), using plaintext")
             print(f"[Provision {action_title}] ⚠️  E2EE not applied (key not found in any location), using plaintext", file=sys.stderr)
-            print(f"[Provision {action_title}]   Searched: user_keys/{user_id}/{device_id}_public.pem, sensor_keys/{user_id}/{device_id}/sensor_public.pem, sensor_keys/{device_id}/sensor_public.pem", file=sys.stderr)
-    else:
-        # "request" action - key may not exist yet, use plaintext
-        payload = json.dumps(payload_dict)
-        app.logger.error(f"[Provision {action_title}] ⚠️  E2EE not applied for 'request' action (key may not exist yet), using plaintext")
-        print(f"[Provision {action_title}] ⚠️  E2EE not applied for 'request' action (key may not exist yet), using plaintext", file=sys.stderr)
+        print(f"[Provision {action_title}]   Searched: database, user_keys/{user_id}/{device_id}_public.pem, sensor_keys/{user_id}/{device_id}/sensor_public.pem, sensor_keys/{device_id}/sensor_public.pem, pending_keys", file=sys.stderr)
     
     print(f"[Provision {action_title}] Sending MQTT message:", file=sys.stderr)
     print(f"  Topic: {topic}", file=sys.stderr)
@@ -1950,15 +1962,21 @@ def submit_data():
                         "message": f"device_type mismatch for sensor. Expected '{sensor_device_type}', got '{payload_device_type}'"
                     }), 400
 
-            # Optional device session enforcement
+            # Device session validation - validate and update session every time before storing
             session_token = decrypted_data.get('session_token')
             session_counter = decrypted_data.get('counter')
             if REQUIRE_DEVICE_SESSION:
+                # Sessions are required - reject if invalid
                 ok, reason = _validate_device_session(session_token, sensor_id, session_counter)
                 if not ok:
                     return jsonify({"status": "error", "message": f"Device session error: {reason}"}), 401
             elif session_token:
-                _validate_device_session(session_token, sensor_id, session_counter)
+                # Sessions are optional but provided - validate and update it
+                ok, reason = _validate_device_session(session_token, sensor_id, session_counter)
+                if not ok:
+                    # Log warning but don't reject (sessions optional)
+                    import sys
+                    print(f"HTTP Sensor: Device session warning for {sensor_id}: {reason} (continuing anyway)", file=sys.stderr)
 
         # Get user_id from sensor_row to store data per user
         sensor_user_id = sensor_row.get('user_id')
@@ -2184,93 +2202,9 @@ def static_favicon():
     """Handle static favicon requests to prevent 404 errors."""
     return '', 204  # No Content
 
-@app.route('/')
-def landing():
-    return render_template('landing.html')
-
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    import sys
-    # Get current user ID (should be set by login_required decorator)
-    user_id = session.get('user_id')
-    username = session.get('user')
-    
-    print(f"DEBUG: dashboard - username: {username}, user_id: {user_id}", file=sys.stderr)
-    sys.stderr.flush()
-    
-    if not user_id:
-        print("ERROR: dashboard - user_id not found in session!", file=sys.stderr)
-        sys.stderr.flush()
-        flash('User session not found. Please log in again.', 'error')
-        return redirect(url_for('login'))
-    
-    # SECURITY: Verify user_id matches username (prevent session hijacking)
-    if username:
-        user = get_user_by_username(username)
-        if user and user['sr_no'] != user_id:
-            print(f"ERROR: dashboard - Session mismatch! username={username}, session_user_id={user_id}, db_user_id={user['sr_no']}", file=sys.stderr)
-            sys.stderr.flush()
-            session.clear()
-            flash('Session error. Please log in again.', 'error')
-            return redirect(url_for('login'))
-    
-    # Get locations that belong to this user ONLY
-    print(f"DEBUG: dashboard - Calling get_locations_with_status for user_id {user_id}", file=sys.stderr)
-    sys.stderr.flush()
-    
-    # Get real-time metrics if available (same as live readings uses)
-    # Structure: user_latest_by_metric[user_id][metric_name] = {'value': val, 'sensor_id': device_id}
-    # We need to pass this to get_locations_with_status so it can filter by location
-    realtime_metrics_data = None
-    if user_id and user_id in user_latest_by_metric:
-        realtime_metrics_data = user_latest_by_metric[user_id]
-    
-    locations_data = get_locations_with_status(user_id=user_id, realtime_metrics_data=realtime_metrics_data)
-    
-    print(f"DEBUG: dashboard - Found {len(locations_data)} locations for user_id {user_id} (username: {username})", file=sys.stderr)
-    for loc in locations_data:
-        print(f"DEBUG: dashboard - Location: {loc.get('location')}, Safe: {loc.get('safe')}, Sensors: {loc.get('sensor_count')}", file=sys.stderr)
-    sys.stderr.flush()
-    
-    # If no locations, check why
-    if not locations_data:
-        print(f"WARNING: dashboard - No locations found for user_id {user_id}!", file=sys.stderr)
-        # Check if user has sensors
-        from db import get_pool, _get_connection, _return_connection, _get_cursor
-        pool = get_pool()
-        if pool:
-            conn = _get_connection(pool)
-            cur = _get_cursor(conn, dictionary=True)
-            cur.execute("SELECT COUNT(*) as count FROM sensors WHERE user_id = %s", (int(user_id),))
-            sensor_count = cur.fetchone()['count']
-            cur.close()
-            _return_connection(pool, conn)
-            print(f"WARNING: dashboard - User {user_id} has {sensor_count} sensors but no locations!", file=sys.stderr)
-            
-            # Check sensor details
-            if sensor_count > 0:
-                conn = _get_connection(pool)
-                cur = _get_cursor(conn, dictionary=True)
-                cur.execute("SELECT device_id, location, status FROM sensors WHERE user_id = %s LIMIT 10", (int(user_id),))
-                sensors = cur.fetchall()
-                cur.close()
-                _return_connection(pool, conn)
-                print(f"DEBUG: dashboard - Sample sensors for user {user_id}:", file=sys.stderr)
-                for s in sensors:
-                    print(f"DEBUG: dashboard -   Sensor: {s.get('device_id')}, Location: {s.get('location')}, Status: {s.get('status')}", file=sys.stderr)
-        sys.stderr.flush()
-    
-    # Get first location as default, or None if no locations
-    default_location = locations_data[0]['location'] if locations_data else None
-    
-    return render_template(
-        "dashboard.html",
-        locations=locations_data,
-        default_location=default_location,
-        current_user_id=user_id,  # Pass for debugging
-        current_username=username,  # Pass for debugging
-    )
+# Dashboard routes (landing, dashboard, readings) are now in routes/dashboard.py
+from routes.dashboard import register_dashboard_routes
+register_dashboard_routes(app, user_latest_by_metric)
 
 @app.route('/api/dashboard/location/<location>')
 @login_required
@@ -2739,161 +2673,17 @@ def api_dashboard_location(location):
     response.headers['Expires'] = '0'
     return response
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    try:
-        next_url = request.args.get('next') or request.form.get('next') or url_for('dashboard')
-        if request.method == 'POST':
-            username = sanitize_input(request.form.get('username') or '')
-            password = request.form.get('password') or ''
-            if not username or not password:
-                flash('Please enter both username and password', 'error')
-            else:
-                try:
-                    user = get_user_by_username(username)
-                    if user and check_password_hash(user.get('password', ''), password):
-                        session['user'] = user.get('username')
-                        session['user_id'] = user.get('sr_no')
-                        session.permanent = True
-                        return redirect(next_url or url_for('dashboard'))
-                    else:
-                        flash('Invalid username or password', 'error')
-                except Exception as db_error:
-                    # Log database connection errors
-                    import sys
-                    error_msg = f"Database error during login: {str(db_error)}"
-                    print(error_msg, file=sys.stderr)
-                    sys.stderr.flush()
-                    flash('Database connection error. Please contact administrator.', 'error')
-        # Render login template (for both GET and POST if login failed)
-        return render_template('login.html', next=next_url)
-    except Exception as e:
-        import sys
-        import traceback
-        error_msg = f"ERROR: login route exception: {str(e)}\n"
-        print(error_msg, file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
-        sys.stderr.flush()
-        return f"Login error: {e}", 500
+# Authentication routes are now in routes/auth.py
+from routes.auth import register_login_routes
+register_login_routes(app)
 
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    """User registration page."""
-    try:
-        next_url = request.args.get('next') or request.form.get('next') or url_for('dashboard')
-        error = None
-        
-        if request.method == 'POST':
-            email = sanitize_input(request.form.get('email') or '')
-            name = sanitize_input(request.form.get('name') or '')
-            username = sanitize_input(request.form.get('username') or '')
-            password = request.form.get('password') or ''
-            confirm = request.form.get('confirm') or ''
-            
-            # Validation
-            if not all([email, name, username, password, confirm]):
-                error = 'All fields are required'
-            elif password != confirm:
-                error = 'Passwords do not match'
-            else:
-                # Validate inputs
-                email_valid, email_error = validate_email(email)
-                if not email_valid:
-                    error = email_error or 'Invalid email address'
-                
-                name_valid, name_error = validate_name(name)
-                if not name_valid and not error:
-                    error = name_error or 'Invalid name'
-                
-                username_valid, username_error = validate_username(username)
-                if not username_valid and not error:
-                    error = username_error or 'Invalid username'
-                
-                password_valid, password_error = validate_password(password)
-                if not password_valid and not error:
-                    error = password_error or 'Invalid password'
-            
-            if not error:
-                # Check if username or email already exists
-                existing_user = get_user_by_username(username)
-                if existing_user:
-                    error = 'Username already exists'
-                else:
-                    existing_email = get_user_by_email(email)
-                    if existing_email:
-                        error = 'Email already registered'
-                    else:
-                        # Create user
-                        try:
-                            # Hash the password before storing
-                            password_hash = generate_password_hash(password)
-                            user_id = create_user(
-                                username=username,
-                                email=email,
-                                password_hash=password_hash,
-                                name=name
-                            )
-                            if user_id:
-                                flash('Registration successful! Please log in.', 'success')
-                                return redirect(url_for('login', next=next_url))
-                            else:
-                                error = 'Registration failed. Please try again.'
-                        except Exception as db_error:
-                            import sys
-                            print(f"ERROR: Registration database error: {db_error}", file=sys.stderr)
-                            error = 'Registration failed. Please try again.'
-        
-        return render_template('register.html', error=error, next=next_url)
-    except Exception as e:
-        import sys
-        import traceback
-        error_msg = f"ERROR: register route exception: {str(e)}\n"
-        print(error_msg, file=sys.stderr)
-        traceback.print_exc(file=sys.stderr)
-        sys.stderr.flush()
-        return f"Registration error: {e}", 500
+# readings route is now in routes/dashboard.py
 
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(url_for('landing'))
+# Simple API routes are now in routes/api.py
+from routes.api import register_api_routes
+register_api_routes(app, get_user_key, add_user_key, user_pending_keys, pending_keys)
 
-@app.route('/readings')
-@login_required
-def readings():
-    """Display live sensor readings page."""
-    user_id = session.get('user_id')
-    if not user_id:
-        flash('User session not found. Please log in again.', 'error')
-        return redirect(url_for('login'))
-    return render_template('readings.html')
-
-@app.route('/api/public/active_sensors')
-def api_public_active_sensors():
-    """Public API endpoint for devices/simulators to get active sensor information."""
-    # Return active sensors with device_id, device_type, user_id, and location
-    # This allows simulators to get the correct device_type from the database
-    try:
-        all_sensors = list_sensors(user_id=None)  # Get all active sensors
-        active_sensors = [s for s in all_sensors if s.get('status') == 'active']
-        
-        # Return minimal information needed by simulators
-        sensor_list = []
-        for sensor in active_sensors:
-            sensor_list.append({
-                'device_id': sensor.get('device_id'),
-                'device_type': sensor.get('device_type'),  # Include device_type from database
-                'user_id': sensor.get('user_id'),
-                'location': sensor.get('location')
-            })
-        
-        return jsonify({'active_sensors': sensor_list}), 200
-    except Exception as e:
-        # On error, return empty list (for backward compatibility)
-        import sys
-        print(f"ERROR: api_public_active_sensors - {e}", file=sys.stderr)
-        sys.stderr.flush()
-        return jsonify({'active_sensors': []}), 200
+# api_public_active_sensors is now in routes/api.py
 
 @app.route('/api/active_sensors')
 @login_required
@@ -2976,11 +2766,21 @@ def api_active_sensors():
                     device_type = device_type or sensor_info.get('device_type')
                     location = location or sensor_info.get('location') or 'Unassigned'
                 
+                recorded_at = reading.get('recorded_at')
+                # Convert datetime to ISO string if it's a datetime object
+                if recorded_at:
+                    if hasattr(recorded_at, 'isoformat'):
+                        recorded_at = recorded_at.isoformat()
+                    elif isinstance(recorded_at, str):
+                        # Already a string, keep as is
+                        pass
+                
                 active_sensors.append({
                     'device_id': device_id,
                     'device_type': device_type,
                     'location': location,
-                    'value': float(value) if value is not None else None
+                    'value': float(value) if value is not None else None,
+                    'recorded_at': recorded_at
                 })
                 print(f"DEBUG: api_active_sensors - Added sensor {device_id}: value={value}, location={location}", file=sys.stderr)
                 app_logger.error(f"DEBUG: api_active_sensors - Added sensor {device_id}: value={value}, location={location}, device_type={device_type}")
@@ -2996,7 +2796,8 @@ def api_active_sensors():
                             'device_id': device_id,
                             'device_type': sensor.get('device_type'),
                             'location': sensor.get('location') or 'Unassigned',
-                            'value': None
+                            'value': None,
+                            'recorded_at': None
                         })
                 
         except Exception as db_err:
@@ -3039,10 +2840,13 @@ def api_active_sensors():
 @app.route('/api/latest')
 @login_required
 def api_latest():
-    """API endpoint to get latest safety status for current user."""
+    """API endpoint to get latest safety status for current user, optionally filtered by location."""
     user_id = session.get('user_id')
     if not user_id:
         return jsonify({"error": "User session not found"}), 401
+    
+    # Get optional location parameter
+    location_filter = request.args.get('location', '').strip()
     
     try:
         import sys
@@ -3063,8 +2867,12 @@ def api_latest():
             print(f"DEBUG: api_latest - Cache empty, querying database for user {user_id}...", file=sys.stderr)
             sys.stderr.flush()
             
-            # Get latest readings from database
-            db_readings = list_recent_sensor_data(limit=100, user_id=user_id)
+            # Get latest readings from database (filter by location if specified)
+            if location_filter:
+                from db import list_recent_sensor_data_by_location
+                db_readings = list_recent_sensor_data_by_location(location_filter, limit=100, user_id=user_id)
+            else:
+                db_readings = list_recent_sensor_data(limit=100, user_id=user_id)
             
             # Build metric data from database readings
             user_metric_data = {}
@@ -3078,7 +2886,7 @@ def api_latest():
                 if device_type and value is not None:
                     try:
                         float_value = float(value)
-                        # Store latest value per metric
+                        # Store latest value per metric (keep most recent if multiple sensors for same metric)
                         if device_type not in user_metric_data:
                             user_metric_data[device_type] = {
                                 'value': float_value,
@@ -3091,8 +2899,14 @@ def api_latest():
             # Update latest dict with all metrics
             latest = latest_dict if latest_dict else latest
         
-        # Build aggregate values
-        agg_values = {k: v.get("value") for k, v in user_metric_data.items() if v and v.get("value") is not None}
+        # Build aggregate values (filtered by location if specified)
+        agg_values = {}
+        for metric, entry in user_metric_data.items():
+            if entry and entry.get("value") is not None:
+                # If location filter is specified, we need to check sensor location
+                # For now, we'll use the cached data which may include all locations
+                # The location filtering happens at the database query level above
+                agg_values[metric] = entry.get("value")
         
         # Build thresholds
         agg_thresholds = {}
@@ -3111,13 +2925,15 @@ def api_latest():
         # Compute safety
         safe, reasons = compute_safety(agg_values, agg_thresholds)
         
-        print(f"DEBUG: api_latest - Returning data for user {user_id}, metrics: {list(agg_values.keys())}, safe: {safe}", file=sys.stderr)
+        location_info = f" (location: {location_filter})" if location_filter else " (all locations)"
+        print(f"DEBUG: api_latest - Returning data for user {user_id}{location_info}, metrics: {list(agg_values.keys())}, safe: {safe}", file=sys.stderr)
         sys.stderr.flush()
         
         return jsonify({
             'safe_to_drink': safe,
             'reasons': reasons if not safe else [],
-            'latest': latest
+            'latest': latest,
+            'location': location_filter if location_filter else None
         })
     except Exception as e:
         import traceback
@@ -3390,379 +3206,19 @@ def compute_public_key_fingerprint(public_key_pem: str | None) -> str | None:
     except Exception:
         return None
 
-@app.route('/sensors')
-@login_required
-def sensors():
-    """Display and manage sensors."""
-    user_id = session.get('user_id')
-    if not user_id:
-        flash('User session not found. Please log in again.', 'error')
-        return redirect(url_for('login'))
-    
-    try:
-        import sys
-        # Get filter parameters
-        q = request.args.get('q', '').strip()
-        status_filter = request.args.get('status', '').strip()
-        
-        # Get user's sensors
-        all_sensors = list_sensors()
-        user_sensors = [s for s in all_sensors if s.get('user_id') == user_id]
-        
-        # Get default thresholds map
-        try:
-            type_defaults = _build_type_defaults_map()
-        except Exception as e:
-            print(f"WARNING: Could not build type defaults map: {e}", file=sys.stderr)
-            type_defaults = {}
-        
-        # Enhance each sensor with computed fields
-        enhanced_sensors = []
-        for sensor in user_sensors:
-            try:
-                device_id = sensor.get('device_id')
-                if not device_id:
-                    continue  # Skip sensors without device_id
-                    
-                device_type = (sensor.get('device_type') or '').lower()
-                
-                # Get public key (from database or file)
-                public_key = sensor.get('public_key')
-                if not public_key:
-                    # Try to get from user's key file
-                    try:
-                        public_key = get_user_key(user_id, device_id)
-                    except Exception as e:
-                        print(f"WARNING: Could not get user key for {device_id}: {e}", file=sys.stderr)
-                        public_key = None
-                
-                # Compute public key fingerprint
-                try:
-                    public_key_fingerprint = compute_public_key_fingerprint(public_key)
-                except Exception as e:
-                    print(f"WARNING: Could not compute fingerprint for {device_id}: {e}", file=sys.stderr)
-                    public_key_fingerprint = None
-                
-                # Get effective thresholds
-                try:
-                    effective_thresholds = build_effective_thresholds_for_sensor(device_id)
-                    threshold_for_type = effective_thresholds.get(device_type, {}) if effective_thresholds else {}
-                except Exception as e:
-                    print(f"WARNING: Could not get effective thresholds for {device_id}: {e}", file=sys.stderr)
-                    threshold_for_type = {}
-                
-                min_threshold_effective = threshold_for_type.get('min')
-                max_threshold_effective = threshold_for_type.get('max')
-                
-                # Get default thresholds for this device type
-                default_thresholds = type_defaults.get(device_type, {}) if type_defaults else {}
-                default_min = default_thresholds.get('min') if isinstance(default_thresholds, dict) else None
-                default_max = default_thresholds.get('max') if isinstance(default_thresholds, dict) else None
-                
-                # Determine threshold source
-                sensor_min = sensor.get('min_threshold')
-                sensor_max = sensor.get('max_threshold')
-                threshold_source = None
-                if sensor_min is not None or sensor_max is not None:
-                    threshold_source = 'custom'
-                elif default_min is not None or default_max is not None:
-                    threshold_source = 'default'
-                
-                # Create enhanced sensor dict
-                enhanced_sensor = dict(sensor)  # Copy original sensor data
-                enhanced_sensor['public_key_fingerprint'] = public_key_fingerprint
-                enhanced_sensor['has_key'] = bool(public_key)  # Track if key exists (for older sensors without key_updated_at)
-                enhanced_sensor['min_threshold_effective'] = min_threshold_effective
-                enhanced_sensor['max_threshold_effective'] = max_threshold_effective
-                enhanced_sensor['default_min'] = default_min
-                enhanced_sensor['default_max'] = default_max
-                enhanced_sensor['threshold_source'] = threshold_source
-                
-                enhanced_sensors.append(enhanced_sensor)
-            except Exception as e:
-                print(f"ERROR: Failed to enhance sensor {sensor.get('device_id', 'unknown')}: {e}", file=sys.stderr)
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-                # Continue processing other sensors even if one fails
-                continue
-        
-        # Apply filters
-        if q:
-            q_lower = q.lower()
-            enhanced_sensors = [s for s in enhanced_sensors if 
-                          q_lower in (s.get('device_id') or '').lower() or
-                          q_lower in (s.get('device_type') or '').lower() or
-                          q_lower in (s.get('location') or '').lower()]
-        
-        if status_filter:
-            enhanced_sensors = [s for s in enhanced_sensors if s.get('status') == status_filter]
-        
-        print(f"DEBUG: sensors - Returning {len(enhanced_sensors)} sensors for user {user_id}", file=sys.stderr)
-        sys.stderr.flush()
-        
-        return render_template('sensors.html', 
-                             sensors=enhanced_sensors,
-                             q=q,
-                             status_filter=status_filter)
-    except Exception as e:
-        import traceback
-        print(f"ERROR: sensors route - {e}")
-        traceback.print_exc()
-        flash('Error loading sensors.', 'error')
-        return render_template('sensors.html', sensors=[], q='', status_filter='')
+# Sensor routes are now in routes/sensors.py
+from routes.sensors import register_sensor_routes
+register_sensor_routes(
+    app,
+    get_user_key,
+    get_user_key_file,
+    notify_raspbian_key_cleanup,
+    _build_type_defaults_map,
+    build_effective_thresholds_for_sensor,
+    compute_public_key_fingerprint
+)
 
-@app.route('/sensors/register', methods=['GET', 'POST'])
-@login_required
-def sensors_register():
-    """Register a new sensor."""
-    user_id = session.get('user_id')
-    if not user_id:
-        flash('User session not found. Please log in again.', 'error')
-        return redirect(url_for('login'))
-    
-    if request.method == 'POST':
-        try:
-            device_id = sanitize_input(request.form.get('device_id') or '')
-            device_type = sanitize_input(request.form.get('device_type') or '')
-            location = sanitize_input(request.form.get('location') or '')
-            
-            # --- FIX STARTS HERE ---
-            # Get status and public_key from the form
-            status = sanitize_input(request.form.get('status') or 'active')
-            public_key = request.form.get('public_key')
-            if public_key:
-                public_key = public_key.strip()
-            # --- FIX ENDS HERE ---
-            
-            # Validation
-            device_id_valid, device_id_error = validate_device_id(device_id)
-            if not device_id_valid:
-                flash(device_id_error or 'Invalid device ID', 'error')
-                return render_template('sensors_register.html', 
-                                     sensor_types=list_sensor_types() or [])
-            
-            device_type_valid, device_type_error, normalized_device_type = validate_device_type(device_type)
-            if not device_type_valid:
-                flash(device_type_error or 'Invalid device type', 'error')
-                return render_template('sensors_register.html',
-                                     sensor_types=list_sensor_types() or [])
-            # Use normalized device type (spaces converted to underscores)
-            device_type = normalized_device_type
-            
-            location_valid, location_error = validate_location(location)
-            if not location_valid and location:  # Location can be empty
-                flash(location_error or 'Invalid location', 'error')
-                return render_template('sensors_register.html',
-                                     sensor_types=list_sensor_types() or [])
-            
-            # Check if device_id already exists for this user
-            existing = get_sensor_by_device_id(device_id, user_id)
-            if existing:
-                flash(f'Sensor with device ID "{device_id}" already registered', 'error')
-                return render_template('sensors_register.html',
-                                     sensor_types=list_sensor_types() or [])
-            
-            # Create sensor
-            # --- FIX: Pass public_key and status to the function ---
-            sensor_created = create_sensor(
-                device_id=device_id,
-                device_type=device_type,
-                location=location or None,
-                public_key=public_key or None,  # NOW PASSING PUBLIC KEY
-                user_id=user_id,
-                status=status  # Using status from form
-            )
-            
-            if sensor_created:
-                # Sensor created successfully - redirect immediately to avoid duplicate submissions
-                flash(f'Sensor "{device_id}" registered successfully!', 'success')
-                return redirect(url_for('sensors'))
-            else:
-                # create_sensor returned False - could be duplicate or other error
-                # Re-check if sensor exists now (might have been created by concurrent request)
-                verify_existing = get_sensor_by_device_id(device_id, user_id)
-                if verify_existing:
-                    flash(f'Sensor with device ID "{device_id}" already registered', 'error')
-                else:
-                    flash('Failed to register sensor. Please try again.', 'error')
-        except Exception as e:
-            import traceback
-            print(f"ERROR: sensors_register POST - {e}")
-            traceback.print_exc()
-            flash(f'Error registering sensor: {str(e)}', 'error')
-    
-    # GET request - show form
-    try:
-        sensor_types = list_sensor_types() or []
-        import sys
-        print(f"DEBUG: sensors_register GET - Found {len(sensor_types)} sensor types", file=sys.stderr)
-        if sensor_types:
-            print(f"DEBUG: Sensor types: {[t.get('type_name', 'NO_NAME') if isinstance(t, dict) else getattr(t, 'type_name', 'NO_NAME') for t in sensor_types[:3]]}", file=sys.stderr)
-        sys.stderr.flush()
-        return render_template('sensors_register.html', sensor_types=sensor_types)
-    except Exception as e:
-        import traceback
-        print(f"ERROR: sensors_register GET - {e}")
-        traceback.print_exc()
-        return render_template('sensors_register.html', sensor_types=[])
-@app.route('/sensors/delete', methods=['POST'])
-@login_required
-def sensors_delete():
-    """Delete a sensor."""
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"error": "User session not found"}), 401
-    
-    try:
-        device_id = sanitize_input(request.form.get('device_id') or '')
-        if not device_id:
-            flash('Device ID is required', 'error')
-            return redirect(url_for('sensors'))
-        
-        # Verify sensor belongs to user (pass user_id to get correct sensor)
-        sensor = get_sensor_by_device_id(device_id, user_id)
-        if not sensor:
-            flash('Sensor not found or access denied', 'error')
-            return redirect(url_for('sensors'))
-        
-        # Delete sensor (pass user_id if delete function supports it)
-        if delete_sensor_by_device_id(device_id):
-            # Also delete user's key file if exists
-            key_file = get_user_key_file(user_id, device_id)
-            if os.path.exists(key_file):
-                try:
-                    os.remove(key_file)
-                except Exception:
-                    pass
-            
-            # Notify via MQTT if configured
-            notify_raspbian_key_cleanup(device_id, user_id)
-            
-            flash(f'Sensor "{device_id}" deleted successfully', 'success')
-        else:
-            flash('Failed to delete sensor', 'error')
-    except Exception as e:
-        import traceback
-        print(f"ERROR: sensors_delete - {e}")
-        traceback.print_exc()
-        flash(f'Error deleting sensor: {str(e)}', 'error')
-    
-    return redirect(url_for('sensors'))
-
-@app.route('/sensors/update', methods=['POST'])
-@login_required
-def sensors_update():
-    """Update a sensor."""
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"error": "User session not found"}), 401
-    
-    try:
-        device_id = sanitize_input(request.form.get('device_id') or '')
-        location = sanitize_input(request.form.get('location') or '')
-        status = sanitize_input(request.form.get('status') or '')
-        min_threshold = request.form.get('min_threshold')
-        max_threshold = request.form.get('max_threshold')
-        
-        if not device_id:
-            flash('Device ID is required', 'error')
-            return redirect(url_for('sensors'))
-        
-        # Verify sensor belongs to user (pass user_id to get correct sensor)
-        sensor = get_sensor_by_device_id(device_id, user_id)
-        if not sensor:
-            flash('Sensor not found or access denied', 'error')
-            return redirect(url_for('sensors'))
-        
-        # Validate inputs
-        if location:
-            location_valid, location_error = validate_location(location)
-            if not location_valid:
-                flash(location_error or 'Invalid location', 'error')
-                return redirect(url_for('sensors'))
-        
-        if status:
-            status_valid, status_error = validate_status(status)
-            if not status_valid:
-                flash(status_error or 'Invalid status', 'error')
-                return redirect(url_for('sensors'))
-        
-        # Parse thresholds (handle empty strings as None)
-        min_thresh = None
-        max_thresh = None
-        if min_threshold and str(min_threshold).strip():
-            try:
-                min_thresh = float(min_threshold)
-            except (ValueError, TypeError):
-                flash('Invalid minimum threshold', 'error')
-                return redirect(url_for('sensors'))
-        
-        if max_threshold and str(max_threshold).strip():
-            try:
-                max_thresh = float(max_threshold)
-            except (ValueError, TypeError):
-                flash('Invalid maximum threshold', 'error')
-                return redirect(url_for('sensors'))
-        
-        # Get public_key from form or keep existing value
-        public_key = request.form.get('public_key', '').strip()
-        if not public_key:
-            # Keep existing public_key if not provided in form
-            public_key = sensor.get('public_key')
-        
-        # Handle "Use default threshold" checkbox
-        # If checkbox is checked (use_default_cb='1'), set thresholds to None to use sensor_type defaults
-        # If unchecked and values provided, use those values
-        # If unchecked but no values, keep existing thresholds
-        use_default_cb = request.form.get('use_default_cb', '0')
-        if use_default_cb == '1':
-            # User wants to use defaults - set to None (database will use sensor_type defaults)
-            min_thresh = None
-            max_thresh = None
-            print(f"DEBUG: sensors_update - Using default thresholds (checkbox checked)", file=sys.stderr)
-        elif min_thresh is None and max_thresh is None:
-            # Checkbox unchecked but no values provided - keep existing thresholds
-            min_thresh = sensor.get('min_threshold')
-            max_thresh = sensor.get('max_threshold')
-            print(f"DEBUG: sensors_update - Keeping existing thresholds: min={min_thresh}, max={max_thresh}", file=sys.stderr)
-        else:
-            # Custom thresholds provided - use them
-            print(f"DEBUG: sensors_update - Using custom thresholds: min={min_thresh}, max={max_thresh}", file=sys.stderr)
-        
-        # Update sensor (pass user_id to ensure we update the correct sensor)
-        print(f"DEBUG: sensors_update - Updating sensor device_id='{device_id}', user_id={user_id}", file=sys.stderr)
-        print(f"DEBUG: sensors_update - min_threshold={min_thresh}, max_threshold={max_thresh}", file=sys.stderr)
-        print(f"DEBUG: sensors_update - location='{location}', status='{status or sensor.get('status')}'", file=sys.stderr)
-        print(f"DEBUG: sensors_update - use_default_cb='{use_default_cb}', existing_min={sensor.get('min_threshold')}, existing_max={sensor.get('max_threshold')}", file=sys.stderr)
-        sys.stderr.flush()
-        
-        update_result = update_sensor_by_device_id(
-            device_id=device_id,
-            location=location or None,
-            status=status or sensor.get('status'),
-            public_key=public_key,
-            min_threshold=min_thresh,
-            max_threshold=max_thresh,
-            user_id=user_id
-        )
-        
-        if update_result:
-            print(f"DEBUG: sensors_update - ✅ Update successful for device_id='{device_id}'", file=sys.stderr)
-            sys.stderr.flush()
-            flash(f'Sensor "{device_id}" updated successfully', 'success')
-        else:
-            print(f"DEBUG: sensors_update - ❌ Update failed for device_id='{device_id}' (update_sensor_by_device_id returned False)", file=sys.stderr)
-            sys.stderr.flush()
-            flash('Failed to update sensor. Check server logs for details.', 'error')
-    except Exception as e:
-        import traceback
-        error_msg = f"ERROR: sensors_update - {e}"
-        print(error_msg, file=sys.stderr)
-        print(traceback.format_exc(), file=sys.stderr)
-        sys.stderr.flush()
-        flash(f'Error updating sensor: {str(e)}', 'error')
-    
-    return redirect(url_for('sensors'))
+# Sensor routes (sensors, sensors/register, sensors/delete, sensors/update) are now in routes/sensors.py
 
 @app.route('/profile', methods=['GET', 'POST'])
 @login_required
@@ -3832,18 +3288,31 @@ def profile():
                         error = password_error or 'Invalid password'
             
             if not error:
-                # Update profile
-                if update_user_profile(user_id, email=email, name=name, username=username_new):
+                # Update profile - use current username to find the record
+                if update_user_profile(username, email=email, name=name, username=username_new):
                     # Update password if provided
                     if new_password:
-                        if not update_user_password(user_id, new_password):
+                        # Hash the new password before updating
+                        password_hash = generate_password_hash(new_password)
+                        # Use new username (after profile update, this is the username in DB)
+                        if not update_user_password(username_new, password_hash):
                             error = 'Failed to update password'
                     
                     if not error:
-                        # Update session
+                        # Update session with new username if it changed
+                        if username_new != username:
                         session['user'] = username_new
                         flash('Profile updated successfully!', 'success')
                         return redirect(url_for('profile'))
+                    else:
+                        # Profile updated but password update failed - re-fetch user with new username
+                        if username_new != username:
+                            session['user'] = username_new
+                        # Re-fetch user data to show updated profile info
+                        user = get_user_by_username(username_new)
+                        if not user:
+                            # Fallback to original user if fetch fails
+                            user = get_user_by_username(username)
                 else:
                     error = 'Failed to update profile'
             
@@ -3859,249 +3328,7 @@ def profile():
         user = get_user_by_username(username) if username else None
         return render_template('profile.html', user=user or {})
 
-@app.route('/api/sensor_type')
-@login_required
-def api_sensor_type():
-    """API endpoint to get sensor type information."""
-    try:
-        sensor_type = request.args.get('type', '').strip().lower()
-        if not sensor_type:
-            return jsonify({"error": "Type parameter is required"}), 400
-        
-        sensor_type_info = get_sensor_type_by_type(sensor_type)
-        if sensor_type_info:
-            return jsonify({
-                'type_name': sensor_type_info.get('type_name'),
-                'default_min': sensor_type_info.get('default_min'),
-                'default_max': sensor_type_info.get('default_max')
-            })
-        else:
-            return jsonify({"error": "Sensor type not found"}), 404
-    except Exception as e:
-        import traceback
-        print(f"ERROR: api_sensor_type - {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/key_upload_status')
-@login_required
-def api_key_upload_status():
-    """API endpoint to check if a key has been uploaded for a device."""
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"error": "User session not found"}), 401
-    
-    try:
-        device_id = sanitize_input(request.args.get('device_id') or '')
-        if not device_id:
-            return jsonify({"error": "device_id parameter is required"}), 400
-        
-        # Check if key exists in user's keys
-        key = get_user_key(user_id, device_id)
-        if key:
-            # FIX: Added 'received': True
-            return jsonify({"status": "uploaded", "received": True, "device_id": device_id})
-        
-        # Check pending keys
-        if user_id in user_pending_keys and device_id in user_pending_keys[user_id]:
-            # FIX: Added 'received': True
-            return jsonify({"status": "pending", "received": True, "device_id": device_id})
-        
-        # Check global pending keys (legacy)
-        if device_id in pending_keys:
-            # FIX: Added 'received': True
-            return jsonify({"status": "pending", "received": True, "device_id": device_id})
-        
-        return jsonify({"status": "not_found", "received": False, "device_id": device_id})
-    except Exception as e:
-        import traceback
-        print(f"ERROR: api_key_upload_status - {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-@app.route('/api/key_upload_fetch')
-@login_required
-def api_key_upload_fetch():
-    """API endpoint to fetch an uploaded key for a device."""
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"error": "User session not found"}), 401
-    
-    try:
-        device_id = sanitize_input(request.args.get('device_id') or '')
-        if not device_id:
-            return jsonify({"error": "device_id parameter is required"}), 400
-        
-        # Get key from user's keys
-        key = get_user_key(user_id, device_id)
-        if key:
-            # Save to database if sensor exists (pass user_id to get correct sensor)
-            sensor = get_sensor_by_device_id(device_id, user_id)
-            if sensor:
-                try:
-                    update_sensor_by_device_id(
-                        device_id=device_id,
-                        location=sensor.get('location'),
-                        status=sensor.get('status'),
-                        public_key=key,
-                        min_threshold=sensor.get('min_threshold'),
-                        max_threshold=sensor.get('max_threshold'),
-                        user_id=user_id
-                    )
-                except Exception:
-                    pass
-            
-            return jsonify({"status": "success", "public_key": key, "device_id": device_id})
-        
-        # Check pending keys
-        if user_id in user_pending_keys and device_id in user_pending_keys[user_id]:
-            key = user_pending_keys[user_id][device_id]
-            # Move to user's keys
-            add_user_key(user_id, device_id, key)
-            return jsonify({"status": "success", "public_key": key, "device_id": device_id})
-        
-        # Check global pending keys (legacy)
-        if device_id in pending_keys:
-            key = pending_keys[device_id]
-            # Move to user's keys
-            add_user_key(user_id, device_id, key)
-            return jsonify({"status": "success", "public_key": key, "device_id": device_id})
-        
-        return jsonify({"error": "Key not found"}), 404
-    except Exception as e:
-        import traceback
-        print(f"ERROR: api_key_upload_fetch - {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/sensor/key_timestamp')
-@login_required
-def api_sensor_key_timestamp():
-    """API endpoint to get the key_updated_at timestamp for a sensor."""
-    user_id = session.get('user_id')
-    if not user_id:
-        return jsonify({"error": "User session not found"}), 401
-    
-    try:
-        device_id = sanitize_input(request.args.get('device_id') or '')
-        if not device_id:
-            return jsonify({"error": "device_id parameter is required"}), 400
-        
-        # Get sensor from database (with user_id to ensure correct sensor)
-        sensor = get_sensor_by_device_id(device_id, user_id)
-        if not sensor:
-            return jsonify({"error": "Sensor not found"}), 404
-        
-        # Get key_updated_at and has_key status
-        key_updated_at = sensor.get('key_updated_at')
-        public_key = sensor.get('public_key')
-        has_key = bool(public_key)
-        
-        # Also check file system as fallback
-        if not has_key:
-            try:
-                file_key = get_user_key(user_id, device_id)
-                has_key = bool(file_key)
-                if file_key:
-                    public_key = file_key
-            except Exception:
-                pass
-        
-        # Compute fingerprint if key exists
-        fingerprint = None
-        if public_key:
-            try:
-                fingerprint = compute_public_key_fingerprint(public_key)
-            except Exception:
-                pass
-        
-        return jsonify({
-            "device_id": device_id,
-            "key_updated_at": key_updated_at.strftime('%Y-%m-%d %H:%M:%S') if key_updated_at else None,
-            "has_key": has_key,
-            "fingerprint": fingerprint
-        })
-    except Exception as e:
-        import traceback
-        print(f"ERROR: api_sensor_key_timestamp - {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/test/env', methods=['GET'])
-@login_required
-def test_env_vars():
-    """Test endpoint to check if environment variables are accessible."""
-    import os
-    return jsonify({
-        "MQTT_HOST": os.environ.get('MQTT_HOST', 'NOT SET'),
-        "MQTT_USER": os.environ.get('MQTT_USER', 'NOT SET'),
-        "MQTT_PASSWORD": "SET" if os.environ.get('MQTT_PASSWORD') else "NOT SET",
-        "MQTT_PORT": os.environ.get('MQTT_PORT', 'NOT SET'),
-        "MQTT_USE_TLS": os.environ.get('MQTT_USE_TLS', 'NOT SET'),
-        "MQTT_TLS_INSECURE": os.environ.get('MQTT_TLS_INSECURE', 'NOT SET'),
-    })
-
-@app.route('/api/test/mqtt', methods=['GET'])
-@login_required
-def test_mqtt_config():
-    """Test endpoint to check MQTT configuration."""
-    mqtt_host = os.environ.get('MQTT_HOST')
-    mqtt_port = os.environ.get('MQTT_PORT', '1883')
-    mqtt_user = os.environ.get('MQTT_USER')
-    mqtt_use_tls = os.environ.get('MQTT_USE_TLS', 'false').lower() in ('true', '1', 'yes')
-    
-    config = {
-        "mqtt_host": mqtt_host or "NOT SET",
-        "mqtt_port": mqtt_port,
-        "mqtt_user": mqtt_user or "NOT SET",
-        "mqtt_use_tls": mqtt_use_tls,
-        "configured": bool(mqtt_host)
-    }
-    
-    # Test if paho-mqtt is available
-    try:
-        import paho.mqtt.publish as publish
-        config["paho_mqtt_available"] = True
-    except ImportError:
-        config["paho_mqtt_available"] = False
-        config["error"] = "paho-mqtt library not installed"
-    
-    # Test publish_kwargs generation
-    if mqtt_host:
-        try:
-            publish_kwargs = _get_mqtt_publish_kwargs()
-            config["publish_kwargs"] = {
-                "hostname": publish_kwargs.get('hostname'),
-                "port": publish_kwargs.get('port'),
-                "has_auth": 'auth' in publish_kwargs,
-                "has_tls": 'tls' in publish_kwargs,
-                "auth_username": publish_kwargs.get('auth', {}).get('username') if 'auth' in publish_kwargs else None
-            }
-            
-            # Test actual publish - test BOTH request and update topics
-            try:
-                import paho.mqtt.publish as publish
-                # Test request topic (this one works)
-                test_topic_request = "provision/test_publish/request"
-                test_payload = '{"device_id":"test_publish","action":"request","user_id":"0"}'
-                publish.single(test_topic_request, test_payload, qos=1, **publish_kwargs)
-                config["test_publish_request"] = "SUCCESS"
-                
-                # Test update topic (this is what fails in provision endpoint)
-                test_topic_update = "provision/test_publish/update"
-                publish.single(test_topic_update, test_payload, qos=1, **publish_kwargs)
-                config["test_publish_update"] = "SUCCESS"
-                config["test_publish"] = "SUCCESS (both topics)"
-            except Exception as pub_err:
-                error_str = str(pub_err)
-                if "test_publish_request" not in config:
-                    config["test_publish_request"] = f"FAILED: {error_str}"
-                if "test_publish_update" not in config:
-                    config["test_publish_update"] = f"FAILED: {error_str}"
-                config["test_publish"] = f"FAILED: {error_str}"
-        except Exception as e:
-            config["publish_kwargs_error"] = str(e)
-    
-    return jsonify(config)
+# api_sensor_type, api_key_upload_status, api_key_upload_fetch, api_sensor_key_timestamp, test_env_vars, test_mqtt_config are now in routes/api.py
 
 @app.route('/test-db', methods=['GET'])
 def test_db_connection():
@@ -4191,7 +3418,11 @@ def test_db_connection():
 
 if __name__ == '__main__':
     # Start MQTT key subscriber if configured
+    # Use wrapper function that calls extracted utility with app dependencies
     start_mqtt_key_subscriber()
+    # Start MQTT sensor subscriber if configured
+    # Use wrapper function that calls extracted utility with app dependencies
+    start_mqtt_sensor_subscriber()
     
     # Default to 0.0.0.0 to accept connections from network (not just localhost)
     # Set FLASK_HOST=127.0.0.1 in environment if you want localhost-only

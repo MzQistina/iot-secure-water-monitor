@@ -14,6 +14,7 @@ import re
 import ssl
 from typing import Optional, List
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 
 # Ensure project root is on sys.path to import shared utils
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -259,6 +260,17 @@ def generate_sensor_reading_for_type_unsafe(sensor_type: str) -> dict:
     return {"ph": round(random.choice([random.uniform(2.0, 6.0), random.uniform(9.0, 12.0)]), 2)}
 
 
+def generate_sensor_reading_for_type_random(sensor_type: str) -> dict:
+    """Randomly generate either safe or unsafe values (50/50 chance).
+    
+    This alternates between safe and unsafe readings for testing purposes.
+    """
+    if random.random() < 0.5:
+        return generate_sensor_reading_for_type_safe(sensor_type)
+    else:
+        return generate_sensor_reading_for_type_unsafe(sensor_type)
+
+
 def generate_safe_payload_all_metrics(prefer_type: Optional[str] = None) -> dict:
     """Return a payload containing safe values for all known metrics.
 
@@ -320,7 +332,17 @@ def publish_mqtt_payload(data: dict, mqtt_host: str = "localhost", mqtt_port: in
             publish_kwargs["tls"] = tls_config
 
     publish.single("secure/sensor", json.dumps(payload), **publish_kwargs)
-    print(f"Published encrypted data to MQTT (device_id: {data.get('device_id', 'unknown')}).")
+    
+    # Compact output: [timestamp] device_id | metric=value
+    device_id = data.get('device_id', 'unknown')
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    metric_keys = ['ph', 'tds', 'turbidity', 'temperature', 'dissolved_oxygen', 'conductivity', 
+                   'ammonia', 'pressure', 'nitrate', 'nitrite', 'orp', 'chlorine', 'salinity', 'flow']
+    reading_value = next((f"{k}={v}" for k, v in data.items() if k in metric_keys), None)
+    if reading_value:
+        print(f"[{timestamp}] {device_id:8} | {reading_value}")
+    else:
+        print(f"[{timestamp}] {device_id:8} | sent")
 
 
 def find_private_key(sensor_id: str, user_id: Optional[int] = None) -> Optional[str]:
@@ -388,13 +410,12 @@ def post_to_server(data: dict, sensor_id: str, server_url: str, user_id: Optiona
     # Auto-find private key path (checks user-specific and legacy locations)
     private_key_path = find_private_key(sensor_id, user_id)
     if not private_key_path:
-        print(f"Missing private key for sensor '{sensor_id}'. Generate keys and register its public key.")
-        print(f"  Searched: sensor_keys/*/{sensor_id}/sensor_private.pem and sensor_keys/{sensor_id}/sensor_private.pem")
+        print(f"❌ Missing private key: {sensor_id}")
         return
     
     signature_b64 = sign_payload(sensor_id, private_key_path, data_json)
     if not signature_b64:
-        print(f"Failed to sign payload for sensor '{sensor_id}' using key at {private_key_path}")
+        print(f"❌ Sign failed: {sensor_id}")
         return
     encrypted_b64["sensor_id"] = sensor_id
     encrypted_b64["signature"] = signature_b64
@@ -404,18 +425,106 @@ def post_to_server(data: dict, sensor_id: str, server_url: str, user_id: Optiona
         endpoint,
         json=encrypted_b64,
     )
-    print("Server response:", response.text)
+    # Show sensor value in server response with timestamp
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    metric_keys = ['ph', 'tds', 'turbidity', 'temperature', 'dissolved_oxygen', 'conductivity', 'ammonia', 'pressure', 'nitrate', 'nitrite', 'orp', 'chlorine', 'salinity', 'flow']
+    reading_value = next((f"{k}={v}" for k, v in data.items() if k in metric_keys), None)
+    if response.status_code == 200:
+        if reading_value:
+            print(f"[{timestamp}] ✅ Server: {sensor_id} | {reading_value}")
+        else:
+            print(f"[{timestamp}] ✅ Server: {sensor_id}")
+    else:
+        if reading_value:
+            print(f"[{timestamp}] ⚠️  Server: {sensor_id} ({response.status_code}) | {reading_value}")
+        else:
+            print(f"[{timestamp}] ⚠️  Server: {sensor_id} ({response.status_code})")
 
 
 def get_active_sensors() -> List[dict]:
+    try:
+        import mysql.connector
+        DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
+        DB_PORT = int(os.getenv('DB_PORT', '3306'))
+        DB_USER = os.getenv('DB_USER', 'root')
+        DB_PASSWORD = os.getenv('DB_PASSWORD', '')
+        DB_NAME = os.getenv('DB_NAME', 'ilmuwanutara_e2eewater')
+        
+        # Try using db module first
+        try:
+            from db import list_sensors
     sensors = list_sensors()
-    return [s for s in (sensors or []) if (s.get('status') == 'active')]
+            if sensors and len(sensors) > 0:
+                active_sensors = [s for s in sensors if (s.get('status') == 'active')]
+                return active_sensors
+        except Exception as db_module_err:
+            print(f"⚠️  db.list_sensors() failed: {db_module_err}, trying direct connection...")
+        
+        # Fallback: direct database query
+        conn = mysql.connector.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            connection_timeout=5
+        )
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM sensors WHERE status = 'active' ORDER BY registered_at DESC")
+        sensors = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        return sensors or []
+    except Exception as e:
+        print(f"❌ Error getting sensors: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
 def pick_active_sensor():
     active_sensors = get_active_sensors()
     if not active_sensors:
         return None
     return random.choice(active_sensors)
+
+# Per-sensor session token cache
+_sensor_sessions = {}  # device_id -> {'token': str, 'counter': int, 'expires_at': datetime}
+
+def _get_device_session(device_id: str, server_url: str) -> Optional[dict]:
+    """Get or refresh device session token for a sensor."""
+    global _sensor_sessions
+    
+    # Check if we have a valid cached session
+    if device_id in _sensor_sessions:
+        session = _sensor_sessions[device_id]
+        expires_at = session.get('expires_at')
+        if expires_at and datetime.now() < expires_at:
+            return session
+    
+    # Request new session from server (use skip_challenge=true for simulators)
+    try:
+        endpoint = f"{(server_url or '').rstrip('/')}/api/device/session/request"
+        params = {'device_id': device_id, 'skip_challenge': 'true'}
+        response = requests.get(endpoint, params=params, timeout=5)
+        if response.status_code == 200:
+            session_data = response.json()
+            token = session_data.get('session_token')
+            expires_in = session_data.get('expires_in_seconds', 900)
+            if token:
+                expires_at = datetime.now() + timedelta(seconds=expires_in)
+                session = {
+                    'token': token,
+                    'counter': 0,
+                    'expires_at': expires_at
+                }
+                _sensor_sessions[device_id] = session
+                return session
+    except Exception:
+        pass
+    
+    return None
 
 def simulate_one(sensor: dict, generator_func, server_url: str, mqtt_host: str, 
                  mqtt_port: int = 1883, mqtt_user: Optional[str] = None, 
@@ -436,15 +545,19 @@ def simulate_one(sensor: dict, generator_func, server_url: str, mqtt_host: str,
         "device_type": device_type,
         "location": sensor.get("location"),
     })
-    print("Client JSON string:", json.dumps(data, sort_keys=True).encode())
-    print("SHA-256 hash:", hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest())
+    
+    # Get device session token if available
+    session = _get_device_session(sensor_id, server_url)
+    if session:
+        session['counter'] += 1
+        data['session_token'] = session['token']
+        data['counter'] = session['counter']
+    
+    # Send to MQTT only (secure/sensor topic)
     publish_mqtt_payload(data, mqtt_host=mqtt_host, mqtt_port=mqtt_port, 
                         mqtt_user=mqtt_user, mqtt_password=mqtt_password,
                         mqtt_use_tls=mqtt_use_tls, mqtt_ca_certs=mqtt_ca_certs,
                         mqtt_tls_insecure=mqtt_tls_insecure)
-    # Get user_id from sensor dict if available (from database query)
-    sensor_user_id = sensor.get("user_id")
-    post_to_server(data, sensor_id, server_url=server_url, user_id=sensor_user_id)
 
 def simulate_many(target_sensors: List[dict], repeat: int, interval_seconds: float, parallel: bool, 
                   generator_func=None, server_url: str = "http://127.0.0.1:5000", mqtt_host: str = "localhost",
@@ -452,21 +565,33 @@ def simulate_many(target_sensors: List[dict], repeat: int, interval_seconds: flo
                   mqtt_use_tls: bool = False, mqtt_ca_certs: Optional[str] = None, 
                   mqtt_tls_insecure: bool = False) -> None:
     if not target_sensors:
-        print("No active sensors selected.")
+        print("❌ No sensors selected")
         return
-    for i in range(int(repeat)):
-        if parallel and len(target_sensors) > 1:
-            with ThreadPoolExecutor(max_workers=len(target_sensors)) as executor:
+    
+    from datetime import datetime
+    
+    try:
+        print(f"📡 {len(target_sensors)} sensor(s) | {repeat} readings | {interval_seconds}s interval\n")
+        for i in range(int(repeat)):
+            
+            if parallel and len(target_sensors) > 1:
+                with ThreadPoolExecutor(max_workers=len(target_sensors)) as executor:
+                    for s in target_sensors:
+                        executor.submit(simulate_one, s, generator_func, server_url, mqtt_host, 
+                                       mqtt_port, mqtt_user, mqtt_password, mqtt_use_tls, 
+                                       mqtt_ca_certs, mqtt_tls_insecure)
+            else:
                 for s in target_sensors:
-                    executor.submit(simulate_one, s, generator_func, server_url, mqtt_host, 
-                                   mqtt_port, mqtt_user, mqtt_password, mqtt_use_tls, 
-                                   mqtt_ca_certs, mqtt_tls_insecure)
-        else:
-            for s in target_sensors:
-                simulate_one(s, generator_func, server_url, mqtt_host, mqtt_port, 
-                           mqtt_user, mqtt_password, mqtt_use_tls, mqtt_ca_certs, mqtt_tls_insecure)
-        if i < (int(repeat) - 1):
-            time.sleep(float(interval_seconds))
+                    simulate_one(s, generator_func, server_url, mqtt_host, mqtt_port, 
+                               mqtt_user, mqtt_password, mqtt_use_tls, mqtt_ca_certs, mqtt_tls_insecure)
+            if i < (int(repeat) - 1):
+                try:
+                    time.sleep(float(interval_seconds))
+                except KeyboardInterrupt:
+                    raise
+    except KeyboardInterrupt:
+        print("\n⏹️  Stopped")
+        return
 
 
 def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 1883,
@@ -482,17 +607,18 @@ def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 
         gen = generate_sensor_reading_for_type_safe
     elif mode == "unsafe":
         gen = generate_sensor_reading_for_type_unsafe
+    elif mode == "random":
+        gen = generate_sensor_reading_for_type_random
     else:
         gen = generate_sensor_reading_for_type
     
     def on_connect(client, userdata, flags, reason_code, properties):
         """Callback when MQTT client connects (API v2)."""
         if reason_code == 0:
-            print(f"Sensor simulator connected to MQTT broker: {mqtt_host}:{mqtt_port}")
             client.subscribe(request_topic)
-            print(f"Subscribed to reading request topic: {request_topic}")
+            print(f"✅ Connected: {mqtt_host}:{mqtt_port} | Topic: {request_topic}")
         else:
-            print(f"Failed to connect to MQTT broker: rc={reason_code}")
+            print(f"❌ Connect failed: rc={reason_code}")
     
     def on_message(client, userdata, msg):
         """Handle incoming reading requests."""
@@ -500,12 +626,12 @@ def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 
             # Extract device_id from topic: reading_request/{device_id}/request
             topic_match = re.match(r'^' + re.escape(reading_request_topic_base) + r'/([^/]+)/request$', msg.topic or '')
             if not topic_match:
-                print(f"Unknown topic format: {msg.topic}")
+                print(f"⚠️  Invalid topic: {msg.topic}")
                 return
             
             device_id = (topic_match.group(1) or '').strip()
             if not device_id:
-                print("Missing device_id in topic")
+                print("⚠️  Missing device_id")
                 return
             
             # Parse request payload
@@ -516,10 +642,7 @@ def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 
                 request_data = {}
             
             location = request_data.get('location', '')
-            print(f"\n=== Received reading request ===")
-            print(f"  Topic: {msg.topic}")
-            print(f"  Device ID: {device_id}")
-            print(f"  Location: {location}")
+            print(f"📥 Request: {device_id}" + (f" ({location})" if location else ""))
             
             # Find sensor in database
             sensors = list_sensors()
@@ -530,7 +653,7 @@ def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 
                     break
             
             if not sensor:
-                print(f"  ⚠️  Sensor '{device_id}' not found or not active. Skipping.")
+                print(f"  ⚠️  {device_id} not found/inactive")
                 return
             
             device_type = sensor.get('device_type', 'ph')
@@ -548,20 +671,16 @@ def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 
                 "location": sensor_location,
             })
             
-            print(f"  Generated reading: {data}")
-            
             # Publish sensor data
             publish_mqtt_payload(data, mqtt_host=mqtt_host, mqtt_port=mqtt_port,
                                 mqtt_user=mqtt_user, mqtt_password=mqtt_password,
                                 mqtt_use_tls=mqtt_use_tls, mqtt_ca_certs=mqtt_ca_certs,
                                 mqtt_tls_insecure=mqtt_tls_insecure)
             
-            print(f"  ✅ Published reading for device '{device_id}'")
+            print(f"  ✅ Published: {device_id}")
             
         except Exception as e:
-            print(f"Error processing reading request: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"❌ Error: {e}")
     
     # Create MQTT client
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
@@ -581,9 +700,9 @@ def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 
                 )
                 if mqtt_tls_insecure:
                     client.tls_insecure_set(True)
-                    print(f"TLS enabled with CA cert: {mqtt_ca_certs} (INSECURE MODE)")
+                    print(f"⚠️  TLS: {mqtt_ca_certs} (INSECURE)")
                 else:
-                    print(f"TLS enabled with CA cert: {mqtt_ca_certs}")
+                    print(f"✅ TLS: {mqtt_ca_certs}")
             else:
                 client.tls_set(
                     cert_reqs=ssl.CERT_NONE if mqtt_tls_insecure else ssl.CERT_REQUIRED,
@@ -591,27 +710,23 @@ def run_reading_request_listener(mqtt_host: str = "localhost", mqtt_port: int = 
                 )
                 if mqtt_tls_insecure:
                     client.tls_insecure_set(True)
-                print(f"TLS enabled (using system CA certs)")
+                print(f"✅ TLS: system certs")
         except Exception as tls_err:
-            print(f"TLS configuration error: {tls_err}")
-            print("Continuing without TLS (insecure)")
+            print(f"⚠️  TLS error: {tls_err}")
     
     client.on_connect = on_connect
     client.on_message = on_message
     
-    print(f"Connecting to MQTT broker: {mqtt_host}:{mqtt_port} ({'TLS' if mqtt_use_tls else 'plain'})")
+    print(f"Connecting: {mqtt_host}:{mqtt_port} ({'TLS' if mqtt_use_tls else 'plain'})")
     try:
         client.connect(mqtt_host, mqtt_port, keepalive=60)
-        print("Sensor simulator listening for reading requests... (Press Ctrl+C to stop)")
+        print("Listening... (Ctrl+C to stop)")
         client.loop_forever()
     except KeyboardInterrupt:
-        print("\nShutting down gracefully...")
+        print("\nShutting down...")
         client.disconnect()
-        print("Disconnected")
     except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Error: {e}")
         client.disconnect()
 
 
@@ -622,7 +737,7 @@ def main() -> None:
     parser.add_argument("--repeat", type=int, default=1, help="Number of times to send per selected sensor")
     parser.add_argument("--interval", type=float, default=1.0, help="Seconds between repeats")
     parser.add_argument("--parallel", action="store_true", help="Simulate selected sensors in parallel")
-    parser.add_argument("--mode", type=str, choices=["safe", "unsafe", "mixed"], default="mixed", help="Reading profile: safe (within thresholds), unsafe (outside), or mixed (original ranges)")
+    parser.add_argument("--mode", type=str, choices=["safe", "unsafe", "mixed", "random"], default="mixed", help="Reading profile: safe (within thresholds), unsafe (outside), mixed (original ranges), or random (alternates safe/unsafe)")
     parser.add_argument("--server-url", type=str, default=os.environ.get("SERVER_URL", "http://127.0.0.1:5000"), help="Base URL of Flask server, e.g., http://192.168.1.10:5000")
     parser.add_argument("--mqtt-host", type=str, default=os.environ.get("MQTT_HOST", "localhost"), help="MQTT broker host (default: localhost)")
     parser.add_argument("--mqtt-port", type=int, default=int(os.environ.get("MQTT_PORT", "1883")), help="MQTT broker port (default: 1883)")
@@ -650,7 +765,7 @@ def main() -> None:
 
     active_sensors = get_active_sensors()
     if not active_sensors:
-        print("No active sensors found. Please register or activate a sensor first.")
+        print("❌ No active sensors")
         return
 
     target_sensors: List[dict] = []
@@ -664,7 +779,7 @@ def main() -> None:
             if s:
                 target_sensors.append(s)
             else:
-                print(f"Skipping '{sid}': not found or not active.")
+                print(f"⚠️  '{sid}' not found/inactive")
     else:
         # Backward-compat: pick one random active sensor
         pick = pick_active_sensor()
@@ -676,24 +791,30 @@ def main() -> None:
         gen = generate_sensor_reading_for_type_safe
     elif args.mode == "unsafe":
         gen = generate_sensor_reading_for_type_unsafe
+    elif args.mode == "random":
+        gen = generate_sensor_reading_for_type_random
     else:
         gen = generate_sensor_reading_for_type
 
-    simulate_many(
-        target_sensors,
-        repeat=args.repeat,
-        interval_seconds=args.interval,
-        parallel=args.parallel,
-        generator_func=gen,
-        server_url=args.server_url,
-        mqtt_host=args.mqtt_host,
-        mqtt_port=args.mqtt_port,
-        mqtt_user=args.mqtt_user,
-        mqtt_password=args.mqtt_password,
-        mqtt_use_tls=args.mqtt_use_tls,
-        mqtt_ca_certs=args.mqtt_ca_certs,
-        mqtt_tls_insecure=args.mqtt_tls_insecure,
-    )
+    try:
+        simulate_many(
+            target_sensors,
+            repeat=args.repeat,
+            interval_seconds=args.interval,
+            parallel=args.parallel,
+            generator_func=gen,
+            server_url=args.server_url,
+            mqtt_host=args.mqtt_host,
+            mqtt_port=args.mqtt_port,
+            mqtt_user=args.mqtt_user,
+            mqtt_password=args.mqtt_password,
+            mqtt_use_tls=args.mqtt_use_tls,
+            mqtt_ca_certs=args.mqtt_ca_certs,
+            mqtt_tls_insecure=args.mqtt_tls_insecure,
+        )
+    except KeyboardInterrupt:
+        print("\n⏹️  Stopped")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

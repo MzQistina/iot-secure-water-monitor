@@ -25,3 +25,8 @@ echo "  ps aux | grep -E 'tcpdump|journalctl|netstat' | grep -v grep"
 
 
 
+
+
+
+
+

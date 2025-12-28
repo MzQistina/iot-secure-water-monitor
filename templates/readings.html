@@ -133,12 +133,39 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
         }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 6px;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            font-weight: 600;
+            font-size: 0.8rem;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+            white-space: nowrap;
+        }
+        .status-badge.not-active {
+            background: #374151;
+            color: #ffffff;
+            border-color: #4b5563;
+        }
+        [data-theme="dark"] .status-badge {
+            background: var(--bg-secondary);
+            border-color: var(--border-input);
+        }
+        [data-theme="dark"] .status-badge.not-active {
+            background: #1f2937;
+            color: #d1d5db;
+            border-color: #374151;
+        }
         .last-update {
             text-align: center;
             color: var(--text-muted);
-            font-size: 0.85rem;
-            margin-top: 8px;
+            font-size: 0.9rem;
+            margin-top: 4px;
+            margin-bottom: 16px;
             transition: color 0.3s ease;
+            font-weight: 500;
         }
         .reading-list { list-style: none; padding: 0; margin: 0; }
         .reading-card {
@@ -163,18 +190,6 @@
         }
         .reading-label { color: var(--text-primary); font-weight: 600; transition: color 0.3s ease; }
         .reading-value { color: var(--text-primary); font-weight: 500; min-width: 120px; text-align: right; transition: color 0.3s ease; }
-        .safe-status {
-            text-align: center;
-            margin-top: 18px;
-            font-size: 1.05rem;
-            font-weight: 600;
-            padding: 10px 0;
-            border-radius: 8px;
-        }
-        .safe { background: #d4f5e9; color: #217a4d; border: 1px solid #b2e6d2; }
-        .unsafe { background: #ffe3e3; color: #b02a37; border: 1px solid #ffb3b3; }
-        .offline { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
-        .issues { color: #9b2c2c; font-size: 0.95rem; margin-top: 8px; }
         .muted { color: var(--text-muted); transition: color 0.3s ease; }
         .stale-warning {
             background: #fef3c7;
@@ -240,10 +255,6 @@
                 min-height: 44px;
                 flex: 1;
             }
-            .safe-status {
-                font-size: 0.95rem;
-                padding: 12px;
-            }
         }
     </style>
 </head>
@@ -252,6 +263,7 @@
     <div class="container">
         <h1>Live Water Readings by Location</h1>
         <div class="sub">Real-time water quality monitoring</div>
+        <div id="lastUpdate" class="last-update"></div>
         
         <div class="controls">
             <div class="control-group">
@@ -278,7 +290,6 @@
         <div id="loadingIndicator" class="loading-overlay" style="display:none;">Loading data...</div>
         
         <ul id="sensor_list" class="reading-list"></ul>
-        <div id="status" class="safe-status offline">⚠️ Device Offline - No sensors connected</div>
         <div id="issues" class="issues" style="display:none"></div>
         <div id="lastUpdate" class="last-update"></div>
     </div>
@@ -293,6 +304,7 @@
         let previousData = null;
         const MAX_RETRIES = 3;
         const STALE_THRESHOLD = 30000; // 30 seconds
+        const REALTIME_THRESHOLD = 300000; // 5 minutes (300 seconds) - data is considered real-time if within this
 
         // Connection status management
         function updateConnectionStatus(status) {
@@ -394,9 +406,13 @@
             sensors.forEach(s => {
                 const loc = (s.location || 'Unknown').trim();
                 const metric = (s.device_type || '').toLowerCase();
-                const entry = byLoc[loc] || { metrics: {}, sources: {} };
+                const entry = byLoc[loc] || { metrics: {}, sources: {}, timestamps: {} };
                 entry.metrics[metric] = s.value;
                 entry.sources[metric] = s.device_id;
+                // Store timestamp for this sensor
+                if (s.recorded_at) {
+                    entry.timestamps[metric] = s.recorded_at;
+                }
                 byLoc[loc] = entry;
             });
             
@@ -435,8 +451,79 @@
                 hlabel.textContent = loc || 'Unknown';
                 
                 const hval = document.createElement('span');
-                hval.className = 'reading-value';
-                hval.textContent = 'Location';
+                hval.className = 'reading-value status-badge';
+                hval.style.fontSize = '0.9rem';
+                hval.style.fontWeight = '500';
+                
+                // Check if data is real-time (within 5 minutes)
+                // Get all sensors for this location to check their timestamps
+                const locationSensors = sensors.filter(s => (s.location || 'Unknown').trim() === loc);
+                const locationTimestamps = locationSensors
+                    .map(s => s.recorded_at)
+                    .filter(t => t !== null && t !== undefined && t !== '');
+                
+                let isRealtime = false;
+                
+                if (locationTimestamps.length > 0) {
+                    // Find the most recent timestamp
+                    const now = new Date();
+                    const latestTimestamp = locationTimestamps.reduce((latest, ts) => {
+                        try {
+                            const tsDate = new Date(ts);
+                            if (isNaN(tsDate.getTime())) return latest; // Invalid date
+                            const latestDate = latest ? new Date(latest) : null;
+                            if (!latestDate || tsDate > latestDate) {
+                                return ts;
+                            }
+                        } catch (e) {
+                            return latest; // Skip invalid timestamps
+                        }
+                        return latest;
+                    }, null);
+                    
+                    if (latestTimestamp) {
+                        try {
+                            const tsDate = new Date(latestTimestamp);
+                            if (!isNaN(tsDate.getTime())) {
+                                const ageMs = now - tsDate;
+                                isRealtime = ageMs < REALTIME_THRESHOLD;
+                            }
+                        } catch (e) {
+                            isRealtime = false;
+                        }
+                    }
+                } else {
+                    // No timestamps available - assume not real-time
+                    isRealtime = false;
+                }
+                
+                // Fetch safety status for this location
+                fetchLocationSafety(loc).then(safety => {
+                    if (!isRealtime) {
+                        // Data is not real-time - show "Not Active" with dark badge
+                        hval.className = 'reading-value status-badge not-active';
+                        hval.innerHTML = '⏸ NOT ACTIVE';
+                    } else if (safety === null) {
+                        hval.className = 'reading-value status-badge';
+                        hval.textContent = 'Checking...';
+                        hval.style.color = 'var(--text-muted)';
+                    } else if (safety.safe) {
+                        hval.className = 'reading-value status-badge';
+                        hval.innerHTML = '<span style="color: #10b981;">✅ SAFE</span>';
+                    } else {
+                        hval.className = 'reading-value status-badge';
+                        hval.innerHTML = '<span style="color: #ef4444;">⚠️ UNSAFE</span>';
+                    }
+                }).catch(() => {
+                    if (!isRealtime) {
+                        hval.className = 'reading-value status-badge not-active';
+                        hval.innerHTML = '⏸ NOT ACTIVE';
+                    } else {
+                        hval.className = 'reading-value status-badge';
+                        hval.textContent = 'N/A';
+                        hval.style.color = 'var(--text-muted)';
+                    }
+                });
                 
                 header.appendChild(hlabel);
                 header.appendChild(hval);
@@ -494,42 +581,115 @@
             previousData = JSON.parse(JSON.stringify(data));
         }
 
-        function updateSafety(data, hasDevices = false){
+        async function updateSafety(data, hasDevices = false){
             if (!data || !hasDevices) {
                 // No devices connected - show offline status
                 setStatus(null, null, [], true);
                 return;
             }
+            
+            // Get all locations from sensor data
+            const sensors = (data && data.active_sensors) || [];
+            const locations = [...new Set(sensors.map(s => (s.location || 'Unknown').trim()))];
+            
+            // Fetch safety status for each location
+            const locationStatuses = {};
+            const statusPromises = locations.map(async (loc) => {
+                try {
+                    const safety = await fetchLocationSafety(loc);
+                    locationStatuses[loc] = safety;
+                } catch(e) {
+                    locationStatuses[loc] = null;
+                }
+            });
+            
+            await Promise.all(statusPromises);
+            
+            // Build location breakdown
+            const safeLocations = [];
+            const unsafeLocations = [];
+            
+            for (const [loc, safety] of Object.entries(locationStatuses)) {
+                if (safety === null) continue;
+                if (safety.safe) {
+                    safeLocations.push(loc);
+                } else {
+                    unsafeLocations.push(loc);
+                }
+            }
+            
             const issues = Array.isArray(data.safety_issues) ? data.safety_issues : [];
             const reasons = Array.isArray(data.reasons) ? data.reasons : issues;
-            setStatus(data.safe_to_drink, data.safe_to_drink, reasons, false);
+            
+            // Determine overall status
+            const overallSafe = unsafeLocations.length === 0 && safeLocations.length > 0;
+            setStatus(overallSafe, overallSafe, reasons, false, {
+                safeLocations,
+                unsafeLocations,
+                locationStatuses
+            });
         }
         
-        function setStatus(textOrSafe, safeFlag, issues, isOffline = false){
+        function setStatus(textOrSafe, safeFlag, issues, isOffline = false, locationBreakdown = null){
             const statusEl = document.getElementById('status');
+            const statusMain = document.getElementById('statusMain');
+            const statusDetails = document.getElementById('statusDetails');
+            
             statusEl.classList.remove('safe','unsafe','muted','offline');
             let text = '';
+            let detailsHtml = '';
+            
             if (isOffline) {
                 statusEl.classList.add('offline');
                 text = '⚠️ Device Offline - No sensors connected';
+                statusDetails.style.display = 'none';
             } else if (typeof textOrSafe === 'boolean') {
                 if (textOrSafe) {
                     statusEl.classList.add('safe');
-                    text = '✅ Water is SAFE to drink.';
+                    text = '✅ Water is SAFE to drink';
                 } else {
                     statusEl.classList.add('unsafe');
-                    text = '⚠️ Water is NOT safe to drink.';
+                    text = '⚠️ Water is NOT safe to drink';
+                }
+                
+                // Show location breakdown if available
+                if (locationBreakdown && (locationBreakdown.safeLocations.length > 0 || locationBreakdown.unsafeLocations.length > 0)) {
+                    statusDetails.style.display = 'block';
+                    detailsHtml = '<div class="status-location-list">';
+                    
+                    if (locationBreakdown.unsafeLocations.length > 0) {
+                        detailsHtml += '<div style="margin-bottom: 8px;"><strong style="color: #991b1b;">⚠️ Locations with issues:</strong></div>';
+                        locationBreakdown.unsafeLocations.forEach(loc => {
+                            const reasons = locationBreakdown.locationStatuses[loc]?.reasons || [];
+                            const reasonsText = reasons.length > 0 ? ` (${reasons.slice(0, 2).join(', ')})` : '';
+                            detailsHtml += `<div class="status-location-item status-location-unsafe">• ${loc}${reasonsText}</div>`;
+                        });
+                    }
+                    
+                    if (locationBreakdown.safeLocations.length > 0) {
+                        detailsHtml += '<div style="margin-top: 12px; margin-bottom: 8px;"><strong style="color: #065f46;">✅ Safe locations:</strong></div>';
+                        locationBreakdown.safeLocations.forEach(loc => {
+                            detailsHtml += `<div class="status-location-item status-location-safe">• ${loc}</div>`;
+                        });
+                    }
+                    
+                    detailsHtml += '</div>';
+                } else {
+                    statusDetails.style.display = 'none';
                 }
             } else {
                 statusEl.classList.add('muted');
                 text = textOrSafe || 'Waiting for data…';
+                statusDetails.style.display = 'none';
             }
-            statusEl.textContent = text;
+            
+            statusMain.textContent = text;
+            statusDetails.innerHTML = detailsHtml;
 
             const issuesEl = document.getElementById('issues');
             if (issues && issues.length && !isOffline) {
                 issuesEl.style.display = 'block';
-                issuesEl.textContent = 'Issues: ' + issues.join('; ');
+                issuesEl.innerHTML = '<strong>Overall Issues:</strong> ' + issues.join('; ');
             } else {
                 issuesEl.style.display = 'none';
                 issuesEl.textContent = '';
@@ -558,7 +718,6 @@
                 return { data, hasDevices };
             } catch(e) {
                 updateConnectionStatus('disconnected');
-                setStatus('Unable to fetch active sensors', null, [], false);
                 setLoading(false);
                 console.error('Fetch error:', e);
                 return { data: null, hasDevices: false };
@@ -572,11 +731,26 @@
                     updateSafety(null, false);
                     return;
                 }
+                // Always fetch for all locations (no location filter)
                 const data = await fetchWithRetry("{{ url_for('api_latest') }}");
                 updateSafety(data, hasDevices);
             } catch(e) {
                 updateSafety(null, hasDevices);
                 console.error('Safety fetch error:', e);
+            }
+        }
+        
+        async function fetchLocationSafety(location) {
+            try {
+                const url = "{{ url_for('api_latest') }}?location=" + encodeURIComponent(location);
+                const data = await fetchWithRetry(url);
+                return {
+                    safe: data.safe_to_drink,
+                    reasons: data.reasons || []
+                };
+            } catch(e) {
+                console.error('Location safety fetch error:', e);
+                return null;
             }
         }
 
@@ -615,10 +789,7 @@
 
         function startIntervals() {
             intervalId1 = setInterval(async () => {
-                const result = await fetchActives();
-                if (result && result.hasDevices !== undefined) {
-                    fetchSafety(result.hasDevices);
-                }
+                await fetchActives();
             }, refreshInterval);
         }
 
@@ -627,29 +798,24 @@
             btn.disabled = true;
             btn.textContent = '⏳ Refreshing...';
             try {
-                const result = await fetchActives();
-                if (result && result.hasDevices !== undefined) {
-                    await fetchSafety(result.hasDevices);
-                } else {
-                    await fetchSafety(false);
-                }
+                await fetchActives();
+                // Also reload the page to ensure everything is fresh
+                setTimeout(() => {
+                    window.location.reload();
+                }, 500); // Small delay to show the refresh message
             } catch (e) {
                 console.error('Manual refresh error:', e);
-            } finally {
-                btn.disabled = false;
-                btn.textContent = '🔄 Refresh';
+                // Still reload even on error
+                setTimeout(() => {
+                    window.location.reload();
+                }, 500);
             }
         }
 
 
         // Initialize
         (async function() {
-            const result = await fetchActives();
-            if (result && result.hasDevices !== undefined) {
-                await fetchSafety(result.hasDevices);
-            } else {
-                await fetchSafety(false);
-            }
+            await fetchActives();
             startIntervals();
         })();
         

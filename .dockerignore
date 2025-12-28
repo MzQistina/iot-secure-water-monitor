@@ -42,10 +42,10 @@ Thumbs.db
 # Git
 .git/
 .gitignore
+.gitattributes
 
 # Docker
-Dockerfile
-docker-compose.yml
+docker-compose*.yml
 .dockerignore
 
 # Environment files
@@ -56,13 +56,30 @@ docker-compose.yml
 # Logs
 *.log
 logs/
+flask_error.log
 
 # Database
 *.db
 *.sqlite
 *.sqlite3
 
-# Documentation
+# Key files (NEVER include in Docker image - use volumes instead)
+keys/*.pem
+keys/*.key
+user_keys/
+sensor_keys/
+*.key
+db_encryption.key
+
+# Certificates (use volumes or environment variables)
+certs/*.pem
+certs/*.crt
+certs/*.key
+*.pem
+*.crt
+*.key
+
+# Documentation (keep only essential)
 *.md
 !README.md
 
@@ -70,8 +87,19 @@ logs/
 test_*.py
 *_test.py
 tests/
+examples/
+
+# Simulators (not needed in production)
+simulators/
 
 # Temporary files
 tmp/
 temp/
 *.tmp
+
+# Windows batch files
+*.bat
+*.ps1
+
+# Archive
+docs/archive/

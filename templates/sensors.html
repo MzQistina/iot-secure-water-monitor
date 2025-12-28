@@ -37,7 +37,6 @@
         .pill { display:inline-block; padding: 4px 8px; border-radius: 999px; font-size: 0.85rem; font-weight: 700; }
         .pill.active { background:#d4f5e9; color:#217a4d; border:1px solid #b2e6d2; }
         .pill.inactive { background:#ffecc7; color:#8a5a00; border:1px solid #ffd591; }
-        .pill.revoked { background:#ffe3e3; color:#b02a37; border:1px solid #ffb3b3; }
         .empty { color: var(--text-secondary); background: var(--bg-tertiary); border:1px dashed var(--border-color); padding: 18px; border-radius: 8px; text-align:center; margin-top: 12px; transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease; }
         .nowrap { white-space: nowrap; }
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; }
@@ -165,7 +164,6 @@
                         <option value="">All statuses</option>
                         <option value="active" {% if status_filter=='active' %}selected{% endif %}>active</option>
                         <option value="inactive" {% if status_filter=='inactive' %}selected{% endif %}>inactive</option>
-                        <option value="revoked" {% if status_filter=='revoked' %}selected{% endif %}>revoked</option>
                     </select>
                     <button class="btn" type="submit" id="filter-btn">Filter</button>
                 </form>
@@ -264,7 +262,6 @@
                             <select name="status">
                                 <option value="active">active</option>
                                 <option value="inactive">inactive</option>
-                                <option value="revoked">revoked</option>
                             </select>
                         </div>
                         
@@ -782,6 +779,35 @@
             
             return keyFound;
         }
+        
+        // Auto-start tour for first-time users after registration
+        (function() {
+            var urlParams = new URLSearchParams(window.location.search);
+            var tourParam = urlParams.get('tour');
+            if (tourParam === 'first_sensor') {
+                // Remove tour parameter from URL
+                if (window.history.replaceState) {
+                    var newUrl = window.location.pathname + (window.location.search.replace(/[?&]tour=first_sensor/, '').replace(/^&/, '?').replace(/^$/, ''));
+                    window.history.replaceState({}, '', newUrl);
+                }
+                // Wait for page to fully load, then start tour
+                setTimeout(function() {
+                    if (typeof startTour === 'function') {
+                        startTour();
+                    } else {
+                        // Wait for tour function to be available
+                        var checkTour = setInterval(function() {
+                            if (typeof startTour === 'function') {
+                                clearInterval(checkTour);
+                                startTour();
+                            }
+                        }, 100);
+                        // Stop checking after 5 seconds
+                        setTimeout(function() { clearInterval(checkTour); }, 5000);
+                    }
+                }, 800);
+            }
+        })();
     </script>
     {% include 'footer.html' ignore missing %}
 </body>

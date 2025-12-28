@@ -59,7 +59,7 @@ def get_connection_pool() -> mysql.connector.pooling.MySQLConnectionPool:
                 autocommit=False,
                 raise_on_warnings=False
             )
-            print(f"MySQL connection pool created successfully: {POOL_NAME}")
+            # MySQL connection pool created
         except Error as err:
             print(f"Error creating connection pool: {err}")
             raise
@@ -113,7 +113,7 @@ def test_connection() -> bool:
         close_connection(conn)
         
         if result:
-            print("Database connection test successful!")
+            # Don't print success message on every test (reduces noise)
             return True
         else:
             print("Database connection test failed: No result returned")

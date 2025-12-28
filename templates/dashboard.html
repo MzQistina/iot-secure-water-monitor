@@ -431,6 +431,13 @@
                         return response.json();
                     })
                     .then(data => {
+                        console.log('Dashboard data received:', {
+                            labels: data.labels?.length || 0,
+                            datasets: data.datasets?.length || 0,
+                            row_count: data.row_count || 0,
+                            point_count: data.point_count || 0
+                        });
+                        
                         if (!data.labels || data.labels.length === 0) {
                             chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No data available (no labels)</div><div style="padding: 10px; color: var(--text-muted);">Row count: ' + (data.row_count || 0) + ', Point count: ' + (data.point_count || 0) + '</div></div>';
                             updateLiveStatus(false);
@@ -457,6 +464,12 @@
             clearAllCharts();
             chartsContainer.innerHTML = '';
             
+            console.log('updateAllCharts called with:', {
+                hasData: !!data,
+                labelsCount: data?.labels?.length || 0,
+                datasetsCount: data?.datasets?.length || 0
+            });
+            
             if (!data || !data.labels || data.labels.length === 0 || !data.datasets) {
                 chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No data available</div></div>';
                 return;
@@ -466,17 +479,42 @@
                 ds.metric !== 'safety_safe' && ds.metric !== 'safety_unsafe'
             );
             
+            console.log('Sensor datasets found:', sensorDatasets.length);
+            
             // Calculate max data points
-            const maxPoints = 100; // Simplified
+            const maxPoints = 100;
             const labels = data.labels || [];
-            const optimizedLabels = labels.length > maxPoints ? 
-                labels.filter((_, i) => i % Math.ceil(labels.length / maxPoints) === 0 || i === labels.length - 1) :
-                labels;
+            
+            // Create index mapping for optimization - ensure labels and data stay aligned
+            let optimizedIndices = [];
+            if (labels.length > maxPoints) {
+                const step = Math.ceil(labels.length / maxPoints);
+                for (let i = 0; i < labels.length; i += step) {
+                    optimizedIndices.push(i);
+                }
+                // Always include the last index
+                if (optimizedIndices[optimizedIndices.length - 1] !== labels.length - 1) {
+                    optimizedIndices.push(labels.length - 1);
+                }
+            } else {
+                // Use all indices if under maxPoints
+                optimizedIndices = Array.from({length: labels.length}, (_, i) => i);
+            }
+            
+            // Create optimized labels using the indices
+            const optimizedLabels = optimizedIndices.map(i => labels[i]);
 
-            // Create sensor charts
-            const sensorsToShow = sensorDatasets.slice(0, 3);
+            // Create sensor charts - show all available sensors
+            const sensorsToShow = sensorDatasets.length > 0 ? sensorDatasets : [];
+            
+            if (sensorsToShow.length === 0) {
+                chartsContainer.innerHTML = '<div class="chart-container"><div class="chart-title">No sensor data available</div></div>';
+                return;
+            }
+            
             sensorsToShow.forEach((dataset, index) => {
-                const chartId = 'chart_' + dataset.metric;
+                try {
+                    const chartId = 'chart_' + dataset.metric + '_' + index;
                 const chartContainer = document.createElement('div');
                 chartContainer.className = 'chart-container';
                 chartContainer.innerHTML = `
@@ -487,15 +525,30 @@
                 `;
                 chartsContainer.appendChild(chartContainer);
 
-                const ctx = document.getElementById(chartId).getContext('2d');
+                    const canvas = document.getElementById(chartId);
+                    if (!canvas) {
+                        console.error('Failed to find canvas element:', chartId);
+                        return;
+                    }
+                    
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                        console.error('Failed to get 2d context for canvas:', chartId);
+                        return;
+                    }
                 
-                // Optimize data points to match labels
-                let optimizedData = dataset.data || [];
-                if (dataset.data.length !== optimizedLabels.length) {
-                     // Simple resampling if needed (though usually labels match data)
-                     if (labels.length > maxPoints) {
-                        optimizedData = dataset.data.filter((_, i) => i % Math.ceil(labels.length / maxPoints) === 0 || i === labels.length - 1);
-                     }
+                    // Optimize data points using the same indices as labels
+                    const datasetData = dataset.data || [];
+                    const optimizedData = optimizedIndices.map(i => {
+                        if (i < datasetData.length) {
+                            return datasetData[i];
+                        }
+                        return null;
+                    });
+                    
+                    // Validate data before creating chart
+                    if (optimizedData.length !== optimizedLabels.length) {
+                        console.warn(`Data length mismatch for ${dataset.metric}: data=${optimizedData.length}, labels=${optimizedLabels.length}`);
                 }
                 
                 chartInstances[dataset.metric] = new Chart(ctx, {
@@ -539,10 +592,13 @@
                         interaction: { intersect: false, mode: 'index' }
                     }
                 });
+                } catch (error) {
+                    console.error('Error creating chart for', dataset.metric, ':', error);
+                }
             });
 
-            // Safety Status Chart
-            if (data.safety_status && data.safety_status.length > 0) {
+            // Safety Status Chart - always create if we have labels
+            if (optimizedLabels.length > 0) {
                 const safetyChartId = 'chart_safety';
                 const safetyContainer = document.createElement('div');
                 safetyContainer.className = 'chart-container';
@@ -556,10 +612,45 @@
 
                 const safetyCtx = document.getElementById(safetyChartId).getContext('2d');
                 
-                let optimizedSafetyData = data.safety_status;
-                if (data.safety_status.length > maxPoints) {
-                    optimizedSafetyData = data.safety_status.filter((_, i) => i % Math.ceil(data.safety_status.length / maxPoints) === 0 || i === data.safety_status.length - 1);
+                // Use the same optimized indices for safety data to match labels
+                const safetyData = data.safety_status || [];
+                
+                // Ensure safety_data length matches labels length
+                // If safety_status is shorter, pad with nulls; if longer, truncate
+                let alignedSafetyData = [];
+                if (safetyData.length === 0) {
+                    // No safety data - fill with nulls
+                    alignedSafetyData = new Array(labels.length).fill(null);
+                } else if (safetyData.length < labels.length) {
+                    // Safety data is shorter - pad with nulls
+                    alignedSafetyData = [...safetyData];
+                    while (alignedSafetyData.length < labels.length) {
+                        alignedSafetyData.push(null);
+                    }
+                } else if (safetyData.length > labels.length) {
+                    // Safety data is longer - truncate
+                    alignedSafetyData = safetyData.slice(0, labels.length);
+                } else {
+                    // Lengths match
+                    alignedSafetyData = safetyData;
                 }
+                
+                // Now optimize using the same indices
+                const optimizedSafetyData = optimizedIndices.map(i => {
+                    if (i < alignedSafetyData.length) {
+                        return alignedSafetyData[i];
+                    }
+                    return null;
+                });
+                
+                console.log('Safety chart data:', {
+                    originalLabelsCount: labels.length,
+                    optimizedLabelsCount: optimizedLabels.length,
+                    originalSafetyCount: safetyData.length,
+                    alignedSafetyCount: alignedSafetyData.length,
+                    optimizedSafetyCount: optimizedSafetyData.length,
+                    dataSample: optimizedSafetyData.slice(0, 5)
+                });
 
                 chartInstances['safety'] = new Chart(safetyCtx, {
                     type: 'bar',
@@ -568,8 +659,8 @@
                         datasets: [{
                             label: 'Safety Status',
                             data: optimizedSafetyData,
-                            backgroundColor: optimizedSafetyData.map(v => v === 1 ? '#22c55e' : '#ef4444'),
-                            borderColor: optimizedSafetyData.map(v => v === 1 ? '#16a34a' : '#dc2626'),
+                            backgroundColor: optimizedSafetyData.map(v => v === 1 ? '#22c55e' : (v === 0 ? '#ef4444' : 'transparent')),
+                            borderColor: optimizedSafetyData.map(v => v === 1 ? '#16a34a' : (v === 0 ? '#dc2626' : 'transparent')),
                             borderWidth: 1,
                             barPercentage: 1.0,
                             categoryPercentage: 1.0

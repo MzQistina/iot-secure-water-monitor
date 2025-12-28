@@ -307,7 +307,7 @@ def validate_status(status: str) -> Tuple[bool, Optional[str]]:
     
     status = status.strip().lower()
     
-    allowed_statuses = ['active', 'inactive', 'revoked']
+    allowed_statuses = ['active', 'inactive']
     if status not in allowed_statuses:
         return False, f"Status must be one of: {', '.join(allowed_statuses)}."
     
